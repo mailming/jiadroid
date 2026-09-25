@@ -6,7 +6,9 @@ Version 0.1 covers discovery, servo position, the Open Duck Mini walk command, t
 
 ## Transport
 
-The protocol is a stream of messages. Version 0.1 carries that stream over TCP. The reference simulator listens on `127.0.0.1:8765`. A later USB serial or Wi-Fi link replaces the socket and keeps these messages.
+The protocol is a stream of messages and does not depend on how it is carried. Intended links are Wi-Fi (TCP), Bluetooth (a serial-style stream such as Bluetooth Classic SPP or a BLE UART service), and USB (USB serial). Each carries the same framed messages below.
+
+Version 0.1 implements TCP only. The reference simulator listens on `127.0.0.1:8765`.
 
 ## Framing
 
