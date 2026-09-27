@@ -1,7 +1,7 @@
 """Draw the printable mini-person marker.
 
-The square code says `jiadroid:person`. Printed at actual size, that code is
-60 mm wide, which is the width the Android app uses for distance.
+The square code says `jiadroid:person`. The phone app's code-width field must
+match the printed width of that square.
 """
 
 from pathlib import Path
@@ -9,38 +9,42 @@ from pathlib import Path
 import segno
 
 PAYLOAD = "jiadroid:person"
-QR_MM = 60.0
-OUT = Path(__file__).with_name("mini-person.svg")
+HERE = Path(__file__).parent
 
 
 def main() -> None:
+    write_marker(60.0, HERE / "mini-person.svg")
+    write_marker(120.0, HERE / "mini-person-large.svg")
+
+
+def write_marker(qr_mm: float, out: Path) -> None:
     code = segno.make(PAYLOAD, error="h")
     rows = [list(row) for row in code.matrix_iter(scale=1, border=0)]
     modules = len(rows)
-    module_mm = QR_MM / modules
+    module_mm = qr_mm / modules
     quiet = 4 * module_mm
     outer = 14.0
     top = 38.0
-    card_w = outer + quiet + QR_MM + quiet + outer
+    card_w = outer + quiet + qr_mm + quiet + outer
     qr_x = outer + quiet
     qr_y = top + quiet
-    quiet_bottom = qr_y + QR_MM + quiet
+    quiet_bottom = qr_y + qr_mm + quiet
     dim_y = quiet_bottom + 26.0
     fold_y = dim_y + 10.0
     card_h = fold_y + 16.0
     parts = [
         svg_header(card_w, card_h),
         f'<rect width="{card_w:.2f}" height="{card_h:.2f}" fill="#f4f0e6"/>',
-        person(card_w, qr_x, qr_y, quiet, quiet_bottom),
-        white_plate(qr_x, qr_y, quiet),
+        person(card_w, qr_x, qr_y, quiet, quiet_bottom, qr_mm),
+        white_plate(qr_x, qr_y, quiet, qr_mm),
         qr_rects(rows, qr_x, qr_y, module_mm),
-        dimension(qr_x, dim_y),
+        dimension(qr_x, dim_y, qr_mm),
         fold(card_w, fold_y),
         f'<rect x="0.4" y="0.4" width="{card_w - 0.8:.2f}" height="{card_h - 0.8:.2f}" fill="none" stroke="#1c1915" stroke-width="0.6"/>',
         "</svg>",
     ]
-    OUT.write_text("\n".join(parts), encoding="utf-8")
-    print(f"wrote {OUT} ({modules} modules, code {QR_MM:.0f} mm)")
+    out.write_text("\n".join(parts), encoding="utf-8")
+    print(f"wrote {out.name} ({modules} modules, code {qr_mm:.0f} mm, card {card_w:.0f} x {card_h:.0f} mm)")
 
 
 def svg_header(width: float, height: float) -> str:
@@ -50,13 +54,13 @@ def svg_header(width: float, height: float) -> str:
     )
 
 
-def person(card_w: float, qr_x: float, qr_y: float, quiet: float, quiet_bottom: float) -> str:
+def person(card_w: float, qr_x: float, qr_y: float, quiet: float, quiet_bottom: float, qr_mm: float) -> str:
     cx = card_w / 2
     arm_h = 26.0
     arm_w = 7.0
-    arm_y = qr_y + (QR_MM - arm_h) / 2
+    arm_y = qr_y + (qr_mm - arm_h) / 2
     left_arm = qr_x - quiet - 3 - arm_w
-    right_arm = qr_x + QR_MM + quiet + 3
+    right_arm = qr_x + qr_mm + quiet + 3
     return "\n".join(
         [
             f'<circle cx="{cx:.2f}" cy="16" r="8" fill="#c4512c"/>',
@@ -71,10 +75,10 @@ def person(card_w: float, qr_x: float, qr_y: float, quiet: float, quiet_bottom: 
     )
 
 
-def white_plate(qr_x: float, qr_y: float, quiet: float) -> str:
+def white_plate(qr_x: float, qr_y: float, quiet: float, qr_mm: float) -> str:
     return (
         f'<rect x="{qr_x - quiet:.2f}" y="{qr_y - quiet:.2f}" '
-        f'width="{QR_MM + 2 * quiet:.2f}" height="{QR_MM + 2 * quiet:.2f}" fill="#ffffff"/>'
+        f'width="{qr_mm + 2 * quiet:.2f}" height="{qr_mm + 2 * quiet:.2f}" fill="#ffffff"/>'
     )
 
 
@@ -91,14 +95,14 @@ def qr_rects(rows: list[list[int]], origin_x: float, origin_y: float, module_mm:
     return "\n".join(rects)
 
 
-def dimension(qr_x: float, y: float) -> str:
-    end = qr_x + QR_MM
+def dimension(qr_x: float, y: float, qr_mm: float) -> str:
+    end = qr_x + qr_mm
     return "\n".join(
         [
             f'<line x1="{qr_x:.2f}" y1="{y:.2f}" x2="{end:.2f}" y2="{y:.2f}" stroke="#1c1915" stroke-width="0.4"/>',
             f'<line x1="{qr_x:.2f}" y1="{y - 1.5:.2f}" x2="{qr_x:.2f}" y2="{y + 1.5:.2f}" stroke="#1c1915" stroke-width="0.4"/>',
             f'<line x1="{end:.2f}" y1="{y - 1.5:.2f}" x2="{end:.2f}" y2="{y + 1.5:.2f}" stroke="#1c1915" stroke-width="0.4"/>',
-            f'<text x="{(qr_x + end) / 2:.2f}" y="{y - 2:.2f}" text-anchor="middle" font-family="sans-serif" font-size="3.2" fill="#1c1915">60 mm</text>',
+            f'<text x="{(qr_x + end) / 2:.2f}" y="{y - 2:.2f}" text-anchor="middle" font-family="sans-serif" font-size="3.2" fill="#1c1915">{qr_mm:.0f} mm</text>',
         ]
     )
 
