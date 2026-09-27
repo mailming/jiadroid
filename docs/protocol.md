@@ -2,13 +2,13 @@
 
 Technical contract for the phone-to-robot link. The idea and the laptop demo are in the [README](../README.md).
 
-Version 0.1 covers discovery, servo position, the Open Duck Mini walk command, telemetry, and safety. The same messages are what a later phone app should send to the duck's runtime.
+Version 0.1 covers discovery, servo position, the Open Duck Mini walk command, telemetry, and safety. The same messages are what the Android and iOS follow apps send to the simulator, and what they should send to the duck's runtime.
 
 ## Transport
 
 The protocol is a stream of messages and does not depend on how it is carried. Intended links are Wi-Fi (TCP), Bluetooth (a serial-style stream such as Bluetooth Classic SPP or a BLE UART service), and USB (USB serial). Each carries the same framed messages below.
 
-Version 0.1 implements TCP only. The reference simulator listens on `127.0.0.1:8765`.
+Version 0.1 implements TCP only. The reference simulator listens on `127.0.0.1:8765`. Use `--host 0.0.0.0` when a phone on the same network should connect.
 
 ## Framing
 
@@ -155,7 +155,7 @@ Failed responses use `error.code`:
 
 ## Reference simulator
 
-`python -m jiadroid.sim` listens on `tcp://127.0.0.1:8765` and announces the 14 Open Duck Mini servos. The Follow Me window decides a walk command, sends it with this protocol, and draws the duck from the command the simulator accepted.
+`python -m jiadroid.sim` listens on `tcp://127.0.0.1:8765` and announces the 14 Open Duck Mini servos. Add `--host 0.0.0.0` so a phone on the same Wi-Fi can connect. The laptop Follow Me window, and the Android and iOS apps, decide a walk command and send it with this protocol.
 
 ## Client shape
 

@@ -1,0 +1,392 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BA0001 /* JiadroidApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0001 /* JiadroidApp.swift */; };
+		BA0002 /* Follow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0002 /* Follow.swift */; };
+		BA0003 /* RobotClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0003 /* RobotClient.swift */; };
+		BA0004 /* FollowSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0004 /* FollowSession.swift */; };
+		BA0005 /* CameraSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0005 /* CameraSession.swift */; };
+		BA0006 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0006 /* ContentView.swift */; };
+		BA0007 /* DuckSimView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0007 /* DuckSimView.swift */; };
+		BA0008 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0008 /* Theme.swift */; };
+		BA0009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA000C /* Assets.xcassets */; };
+		BA000A /* FollowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000A /* FollowTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		PX0001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = PR0001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = T00001;
+			remoteInfo = Jiadroid;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		FA0001 /* JiadroidApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JiadroidApp.swift; sourceTree = "<group>"; };
+		FA0002 /* Follow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Follow.swift; sourceTree = "<group>"; };
+		FA0003 /* RobotClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotClient.swift; sourceTree = "<group>"; };
+		FA0004 /* FollowSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowSession.swift; sourceTree = "<group>"; };
+		FA0005 /* CameraSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraSession.swift; sourceTree = "<group>"; };
+		FA0006 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		FA0007 /* DuckSimView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckSimView.swift; sourceTree = "<group>"; };
+		FA0008 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		FA0009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FA000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FA000A /* FollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowTests.swift; sourceTree = "<group>"; };
+		R00001 /* Jiadroid.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiadroid.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		R00002 /* JiadroidTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JiadroidTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		P00003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		P00005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		G00001 /* Jiadroid */ = {
+			isa = PBXGroup;
+			children = (
+				FA0001 /* JiadroidApp.swift */,
+				FA0002 /* Follow.swift */,
+				FA0003 /* RobotClient.swift */,
+				FA0004 /* FollowSession.swift */,
+				FA0005 /* CameraSession.swift */,
+				FA0006 /* ContentView.swift */,
+				FA0007 /* DuckSimView.swift */,
+				FA0008 /* Theme.swift */,
+				FA0009 /* Info.plist */,
+				FA000C /* Assets.xcassets */,
+			);
+			path = Jiadroid;
+			sourceTree = "<group>";
+		};
+		G00002 /* JiadroidTests */ = {
+			isa = PBXGroup;
+			children = (
+				FA000A /* FollowTests.swift */,
+			);
+			path = JiadroidTests;
+			sourceTree = "<group>";
+		};
+		G00003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				R00001 /* Jiadroid.app */,
+				R00002 /* JiadroidTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		G00004 = {
+			isa = PBXGroup;
+			children = (
+				G00001 /* Jiadroid */,
+				G00002 /* JiadroidTests */,
+				G00003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		T00001 /* Jiadroid */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = L00002 /* Build configuration list for PBXNativeTarget "Jiadroid" */;
+			buildPhases = (
+				P00001 /* Sources */,
+				P00003 /* Frameworks */,
+				P00002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Jiadroid;
+			productName = Jiadroid;
+			productReference = R00001 /* Jiadroid.app */;
+			productType = "com.apple.product-type.application";
+		};
+		T00002 /* JiadroidTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = L00003 /* Build configuration list for PBXNativeTarget "JiadroidTests" */;
+			buildPhases = (
+				P00004 /* Sources */,
+				P00005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D00001 /* PBXTargetDependency */,
+			);
+			name = JiadroidTests;
+			productName = JiadroidTests;
+			productReference = R00002 /* JiadroidTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		PR0001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					T00001 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					T00002 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = T00001;
+					};
+				};
+			};
+			buildConfigurationList = L00001 /* Build configuration list for PBXProject "Jiadroid" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = G00004;
+			productRefGroup = G00003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				T00001 /* Jiadroid */,
+				T00002 /* JiadroidTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		P00002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA0009 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		P00001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA0001 /* JiadroidApp.swift in Sources */,
+				BA0002 /* Follow.swift in Sources */,
+				BA0003 /* RobotClient.swift in Sources */,
+				BA0004 /* FollowSession.swift in Sources */,
+				BA0005 /* CameraSession.swift in Sources */,
+				BA0006 /* ContentView.swift in Sources */,
+				BA0007 /* DuckSimView.swift in Sources */,
+				BA0008 /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		P00004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BA000A /* FollowTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D00001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = T00001 /* Jiadroid */;
+			targetProxy = PX0001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		C00001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C00002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		C00003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jiadroid/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios;
+				PRODUCT_NAME = Jiadroid;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C00004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Jiadroid/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios;
+				PRODUCT_NAME = Jiadroid;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		C00005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios.tests;
+				PRODUCT_NAME = JiadroidTests;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jiadroid.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jiadroid";
+			};
+			name = Debug;
+		};
+		C00006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios.tests;
+				PRODUCT_NAME = JiadroidTests;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jiadroid.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Jiadroid";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		L00001 /* Build configuration list for PBXProject "Jiadroid" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C00001 /* Debug */,
+				C00002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		L00002 /* Build configuration list for PBXNativeTarget "Jiadroid" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C00003 /* Debug */,
+				C00004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		L00003 /* Build configuration list for PBXNativeTarget "JiadroidTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C00005 /* Debug */,
+				C00006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = PR0001 /* Project object */;
+}

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jiadroid"
 version = "0.1.0"
-description = "Phone-to-robot protocol for an Open Duck Mini, with a Follow Me demo"
+description = "Phone-to-robot protocol for an Open Duck Mini, with a Follow Me demo and Android and iOS marker tests"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

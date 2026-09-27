@@ -114,6 +114,22 @@ Try this:
 
 Escape closes the window.
 
+## Try it on a phone
+
+The first phone test uses a printed mini person, not a real person. The phone's back camera finds that marker, decides the walk command, and moves a duck drawn on the phone. The same command can be sent to the laptop simulator.
+
+1. Open `android/marker/mini-person.svg` and print it at actual size, so the square code is 60 mm wide. Cut it out and fold the tab so it stands. For a quick look, you can also open the picture on a laptop screen; left, right, and stop still work, and the app's code-width field corrects the distance.
+2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
+3. Point the back camera at the mini person. Center it and the duck walks forward. Move it to either side and the duck turns. Come too close, or cover the code, and the duck stops.
+4. To drive the laptop simulator as well, start it where the phone can reach it, then enter that address in the app and tap Connect.
+
+```bash
+python -m pip install -e .
+python -m jiadroid.sim --host 0.0.0.0
+```
+
+The phone and the laptop need to be on the same Wi-Fi. The simulator prints the address to enter.
+
 ## What exists today
 
 - A shared language between phone and robot. The robot announces its hardware. The phone sends commands. The robot reports what it is doing.
@@ -121,13 +137,13 @@ Escape closes the window.
 - A simulated Open Duck Mini that announces its 14 servos and accepts walk commands.
 - Follow Me logic that decides where the robot should go.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
+- Android and iOS apps that track a printed mini-person marker, move a simulated duck on the phone, and can send that same walk command to the laptop simulator.
 
 ## What is not built yet
 
-- A phone app. The laptop plays the phone's role for now.
-- Real person detection with a camera. The mouse stands in for the person.
-- Bluetooth and USB connections. Today's demo uses a network connection only.
-- A connection to a real Open Duck Mini. The next step is to feed the phone's walk command into the duck's existing walking software, in place of its game controller.
+- Real person detection. The printed mini person stands in for a person.
+- A dock that mounts the phone on the duck, and a connection to a real Open Duck Mini. The next step is to feed the phone's walk command into the duck's existing walking software, in place of its game controller.
+- Bluetooth and USB connections. The phone reaches the simulator over the network.
 - A second robot body, such as a robot vacuum or a robot dog, to prove that one phone can drive very different machines.
 
 ## Where this goes

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="paper">#F4F0E6</color>
+    <color name="ink">#1C1915</color>
+    <color name="muted">#6E675E</color>
+    <color name="cone">#E4D9C6</color>
+    <color name="grid">#E7E0D4</color>
+    <color name="person">#C4512C</color>
+    <color name="go">#1D6B45</color>
+    <color name="stop">#8D3B2C</color>
+    <color name="trail">#B7AD9F</color>
+    <color name="duck">#F0B429</color>
+    <color name="beak">#E07A2F</color>
+</resources>

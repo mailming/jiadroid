@@ -254,6 +254,10 @@ class SimulatorServer:
     def serve_forever(self) -> None:
         self.start()
         print(f"jiadroid simulator listening on tcp://{self.host}:{self.port}", flush=True)
+        if self.host == "0.0.0.0":
+            ip = _lan_ip()
+            if ip:
+                print(f"from the phone, connect to {ip}:{self.port}", flush=True)
         if self._accept_thread is not None:
             self._accept_thread.join()
 
@@ -317,6 +321,17 @@ class SimulatorServer:
         finally:
             pump.stop()
             stream.close()
+
+
+def _lan_ip() -> str | None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
 
 
 def _device_id(body: dict) -> str:
