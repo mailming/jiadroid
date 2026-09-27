@@ -72,6 +72,42 @@ class FollowTest {
     }
 
     @Test
+    fun markerTenFeetAwayIsNotTooClose() {
+        // A 120 mm code at about 10 feet covers ~4% of a portrait webcam frame.
+        val fov = uprightFieldOfView(90, 960, 1280)
+        val scene = measure(480f, 38f, 960, fov, 0.12f)
+        assertTrue(scene.visible)
+        assertTrue(scene.distance > 2f)
+        assertEquals("Marker is too far", decide(scene).situation)
+    }
+
+    @Test
+    fun adultAcrossTheRoomIsFollowed() {
+        // 1.7 m adult about 3 m away, portrait webcam frame 960 wide.
+        val fov = uprightFieldOfView(90, 960, 1280)
+        val fx = 480.0 / kotlin.math.tan(fov / 2.0)
+        val shoulderPx = (1.7 * 0.22 * fx / 3.0).toFloat()
+        val torsoPx = (1.7 * 0.29 * fx / 3.0).toFloat()
+        val shoulders = Point(480f - shoulderPx / 2, 400f) to Point(480f + shoulderPx / 2, 400f)
+        val hips = Point(470f, 400f + torsoPx) to Point(490f, 400f + torsoPx)
+        val scene = measurePerson(shoulders, hips, 960, fov, 1.7f)
+        assertTrue(scene.visible)
+        assertEquals(3f, scene.distance, 0.05f)
+        assertEquals("Person is too far", decide(scene, "Person").situation)
+    }
+
+    @Test
+    fun personTurnedSidewaysIsNotReadAsFar() {
+        val fov = uprightFieldOfView(90, 960, 1280)
+        val fx = 480.0 / kotlin.math.tan(fov / 2.0)
+        val torsoPx = (1.7 * 0.29 * fx / 0.3).toFloat()
+        val shoulders = Point(470f, 100f) to Point(490f, 100f)
+        val hips = Point(470f, 100f + torsoPx) to Point(490f, 100f + torsoPx)
+        val scene = measurePerson(shoulders, hips, 960, fov, 1.7f)
+        assertEquals("Person is too close", decide(scene, "Person").situation)
+    }
+
+    @Test
     fun duckWalksForwardInItsFacingDirection() {
         val pose = Pose(0f, 0f, (PI / 2.0).toFloat())
         stepPose(pose, 0.1f, 0f, 0f, 1f)

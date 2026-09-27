@@ -113,7 +113,7 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val reach = scene.distance.coerceAtMost(1.55f)
         val point = duckPoint(cos(scene.angle) * reach, sin(scene.angle) * reach)
         canvas.drawCircle(point.x, point.y, 12f, personPaint)
-        canvas.drawText("marker", point.x, point.y - 18f, personText)
+        canvas.drawText("target", point.x, point.y - 18f, personText)
     }
 
     private fun drawDuck(canvas: Canvas) {

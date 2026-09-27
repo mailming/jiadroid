@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.util.Size
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,8 +20,8 @@ import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -28,7 +29,12 @@ import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.pose.PoseDetection
+import com.google.mlkit.vision.pose.PoseDetector
+import com.google.mlkit.vision.pose.PoseLandmark
+import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import dev.jiadroid.follow.databinding.ActivityMainBinding
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -57,11 +63,19 @@ class MainActivity : AppCompatActivity() {
     private var hfovRad = Math.toRadians(70.0)
     private var sensorHfov = 0.0
     private var sensorVfov = 0.0
+    private var loggedFrame = false
+    private var gazeY = 0f
     private val pose = Pose(0f, 0f, (Math.PI / 2.0).toFloat())
     private var gait = 0f
 
+    private var subject = SUBJECT_MARKER
+
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
+    )
+
+    private val bodies: PoseDetector = PoseDetection.getClient(
+        PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build(),
     )
 
     private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -86,6 +100,9 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        showDebug(false)
+        binding.openDebug.setOnClickListener { showDebug(true) }
+        binding.closeDebug.setOnClickListener { showDebug(false) }
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
         }
@@ -123,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         if (robot != null) release(robot)
         cameraProvider?.unbindAll()
         scanner.close()
+        bodies.close()
         cameraExecutor.shutdown()
         io.shutdown()
         super.onDestroy()
@@ -134,14 +152,23 @@ class MainActivity : AppCompatActivity() {
         if (!fresh) {
             lastScene = scene
             markerCorners = null
-            binding.overlay.setMarker(null, 0, 0)
+            binding.overlay.setMarker(null, 0, 0, "")
         }
-        val decision = decide(scene)
+        val decision = decide(scene, subject)
         if (decision.command == "STOP") gait = 0f else gait += dt * 7f
         stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
+        binding.eyes.render(decision, if (scene.visible) gazeY else 0f)
         show(decision, scene)
         send(decision, force = false)
+    }
+
+    private fun showDebug(show: Boolean) {
+        // Keep Debug mode laid out behind the eyes. CameraX needs PreviewView's
+        // surface even when the user only sees the normal eyes screen.
+        binding.debugMode.visibility = android.view.View.VISIBLE
+        binding.normalMode.visibility = if (show) android.view.View.GONE else android.view.View.VISIBLE
+        if (!show) binding.normalMode.bringToFront()
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {
@@ -149,7 +176,7 @@ class MainActivity : AppCompatActivity() {
         binding.situation.text = decision.situation
         binding.command.text = decision.command
         binding.command.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
-        val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "no marker"
+        val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "nothing seen"
         val robot = link.get()
         val where = if (robot == null) "phone sim" else robot.safety
         binding.detail.text = String.format(
@@ -271,6 +298,12 @@ class MainActivity : AppCompatActivity() {
         return mm / 1000f
     }
 
+    private fun personHeightM(): Float {
+        val mm = binding.personMm.text?.toString()?.toFloatOrNull() ?: return PERSON_HEIGHT_MM / 1000f
+        if (mm < 100f || mm > 2500f) return PERSON_HEIGHT_MM / 1000f
+        return mm / 1000f
+    }
+
     private fun hideKeyboard() {
         val imm = getSystemService(InputMethodManager::class.java)
         imm?.hideSoftInputFromWindow(binding.host.windowToken, 0)
@@ -284,18 +317,20 @@ class MainActivity : AppCompatActivity() {
                 cameraProvider = provider
                 bindCamera(provider)
             } catch (error: Exception) {
-                binding.situation.text = error.message ?: getString(R.string.no_back_camera)
+                binding.situation.text = error.message ?: getString(R.string.no_front_camera)
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun bindCamera(provider: ProcessCameraProvider) {
-        if (!provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
-            binding.situation.text = getString(R.string.no_back_camera)
+        if (!provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+            binding.situation.text = getString(R.string.no_front_camera)
             return
         }
         val selector = ResolutionSelector.Builder()
-            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+            .setResolutionStrategy(
+                ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER),
+            )
             .build()
         val preview = Preview.Builder().setResolutionSelector(selector).build()
         preview.surfaceProvider = binding.preview.surfaceProvider
@@ -307,10 +342,10 @@ class MainActivity : AppCompatActivity() {
         analysis.setAnalyzer(cameraExecutor, ::analyze)
         try {
             provider.unbindAll()
-            val camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            val camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
             readHfov(camera)
         } catch (error: Exception) {
-            binding.situation.text = error.message ?: getString(R.string.no_back_camera)
+            binding.situation.text = error.message ?: getString(R.string.no_front_camera)
             Log.i(TAG, "camera bind failed", error)
         }
     }
@@ -324,15 +359,30 @@ class MainActivity : AppCompatActivity() {
         val rotation = image.imageInfo.rotationDegrees
         val uprightWidth = if (rotation == 90 || rotation == 270) image.height else image.width
         val uprightHeight = if (rotation == 90 || rotation == 270) image.width else image.height
+        if (!loggedFrame) {
+            loggedFrame = true
+            Log.i(TAG, "frame ${image.width}x${image.height} rot=$rotation crop=${image.cropRect}")
+        }
         try {
             val input = InputImage.fromMediaImage(media, rotation)
             scanner.process(input)
-                .addOnSuccessListener { codes ->
-                    val hit = codes.firstOrNull { it.rawValue == MARKER_PAYLOAD } ?: return@addOnSuccessListener
-                    val corners = cornersOf(hit) ?: return@addOnSuccessListener
-                    handler.post {
-                        if (isDestroyed) return@post
-                        onMarker(corners, uprightWidth, uprightHeight, rotation)
+                .continueWithTask { codes ->
+                    val hit = if (codes.isSuccessful) codes.result.firstOrNull { it.rawValue == MARKER_PAYLOAD } else null
+                    val corners = hit?.let(::cornersOf)
+                    if (corners != null) {
+                        handler.post {
+                            if (!isDestroyed) onMarker(corners, uprightWidth, uprightHeight, rotation)
+                        }
+                        return@continueWithTask Tasks.forResult<Unit?>(null)
+                    }
+                    bodies.process(input).continueWith { found ->
+                        if (found.isSuccessful) {
+                            val body = found.result
+                            handler.post {
+                                if (!isDestroyed) onPerson(body, uprightWidth, uprightHeight, rotation)
+                            }
+                        }
+                        null
                     }
                 }
                 .addOnCompleteListener { image.close() }
@@ -343,18 +393,96 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onMarker(corners: List<PointF>, imageWidth: Int, imageHeight: Int, rotation: Int) {
-        val centerX = corners.map { it.x }.average().toFloat()
-        val top = hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y)
-        val bottom = hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y)
-        hfovRad = hfovFor(rotation)
-        val measured = measure(centerX, (top + bottom) / 2f, imageWidth, hfovRad, markerWidthM())
+        val placed = uprightCorners(corners, rotation, imageWidth, imageHeight)
+        gazeY = (((placed.map { it.y }.average().toFloat() / imageHeight) - 0.5f) * 2f)
+            .coerceIn(-1f, 1f)
+        val centerX = placed.map { it.x }.average().toFloat()
+        val widthPx = minOf(
+            hypot(placed[1].x - placed[0].x, placed[1].y - placed[0].y),
+            hypot(placed[2].x - placed[3].x, placed[2].y - placed[3].y),
+            hypot(placed[2].x - placed[1].x, placed[2].y - placed[1].y),
+            hypot(placed[0].x - placed[3].x, placed[0].y - placed[3].y),
+        )
+        hfovRad = hfovFor(rotation, imageWidth, imageHeight)
+        val measured = measure(centerX, widthPx, imageWidth, hfovRad, markerWidthM())
+        Log.i(
+            TAG,
+            "marker ${"%.0f".format(Locale.US, widthPx)}px in ${imageWidth}x$imageHeight " +
+                "rot=$rotation fov=${"%.0f".format(Locale.US, Math.toDegrees(hfovRad))} " +
+                "mm=${"%.0f".format(Locale.US, markerWidthM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+        )
+        accept(measured, SUBJECT_MARKER, placed, imageWidth, imageHeight)
+    }
+
+    private fun onPerson(body: com.google.mlkit.vision.pose.Pose, imageWidth: Int, imageHeight: Int, rotation: Int) {
+        if (subject == SUBJECT_MARKER && lastScene.visible &&
+            SystemClock.elapsedRealtime() - lastMarkerAt < HOLD_MS
+        ) {
+            return
+        }
+        val leftShoulder = seen(body, PoseLandmark.LEFT_SHOULDER) ?: return
+        val rightShoulder = seen(body, PoseLandmark.RIGHT_SHOULDER) ?: return
+        val nose = seen(body, PoseLandmark.NOSE)
+        val leftHip = seen(body, PoseLandmark.LEFT_HIP)
+        val rightHip = seen(body, PoseLandmark.RIGHT_HIP)
+        val hips = if (leftHip != null && rightHip != null) leftHip to rightHip else null
+        if (nose != null) {
+            gazeY = (((nose.y / imageHeight) - 0.5f) * 2f).coerceIn(-1f, 1f)
+        }
+        hfovRad = hfovFor(rotation, imageWidth, imageHeight)
+        val measured = measurePerson(leftShoulder to rightShoulder, hips, imageWidth, hfovRad, personHeightM())
+        Log.i(
+            TAG,
+            "person shoulders ${"%.0f".format(Locale.US, leftShoulder.distanceTo(rightShoulder))}px " +
+                "hips=${hips != null} in ${imageWidth}x$imageHeight " +
+                "mm=${"%.0f".format(Locale.US, personHeightM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+        )
+        val shoulderWidth = leftShoulder.distanceTo(rightShoulder)
+        val lowLeft = leftHip ?: Point(leftShoulder.x, leftShoulder.y + shoulderWidth)
+        val lowRight = rightHip ?: Point(rightShoulder.x, rightShoulder.y + shoulderWidth)
+        val box = listOf(rightShoulder, leftShoulder, lowLeft, lowRight).map { PointF(it.x, it.y) }
+        accept(measured, SUBJECT_PERSON, box, imageWidth, imageHeight)
+    }
+
+    private fun seen(body: com.google.mlkit.vision.pose.Pose, type: Int): Point? {
+        val landmark = body.getPoseLandmark(type) ?: return null
+        if (landmark.inFrameLikelihood < BODY_LIKELIHOOD) return null
+        return Point(landmark.position.x, landmark.position.y)
+    }
+
+    private fun accept(measured: Scene, seenSubject: String, corners: List<PointF>, imageWidth: Int, imageHeight: Int) {
         if (!measured.visible) return
+        if (seenSubject != subject) {
+            subject = seenSubject
+            lastScene = Scene(false, 0f, 0f)
+        }
         lastScene = smoothScene(lastScene, measured)
         lastMarkerAt = SystemClock.elapsedRealtime()
         markerCorners = corners
         markerImageWidth = imageWidth
         markerImageHeight = imageHeight
-        binding.overlay.setMarker(corners, imageWidth, imageHeight)
+        val label = if (seenSubject == SUBJECT_PERSON) "person" else "mini person"
+        binding.overlay.setMarker(corners, imageWidth, imageHeight, label)
+    }
+
+    /** Corner points are upright. If they still sit in the raw buffer, rotate them. */
+    private fun uprightCorners(
+        corners: List<PointF>,
+        rotation: Int,
+        uprightWidth: Int,
+        uprightHeight: Int,
+    ): List<PointF> {
+        val maxX = corners.maxOf { it.x }
+        val maxY = corners.maxOf { it.y }
+        if (maxX <= uprightWidth + 1f && maxY <= uprightHeight + 1f) return corners
+        val bufferWidth = if (rotation == 90 || rotation == 270) uprightHeight else uprightWidth
+        val bufferHeight = if (rotation == 90 || rotation == 270) uprightWidth else uprightHeight
+        return when (rotation) {
+            90 -> corners.map { PointF(it.y, bufferWidth - it.x) }
+            270 -> corners.map { PointF(bufferHeight - it.y, it.x) }
+            180 -> corners.map { PointF(bufferWidth - it.x, bufferHeight - it.y) }
+            else -> corners
+        }
     }
 
     private fun cornersOf(barcode: Barcode): List<PointF>? {
@@ -384,6 +512,12 @@ class MainActivity : AppCompatActivity() {
             val widthMm = active.width() * (physical.width / pixels.width.toFloat())
             val heightMm = active.height() * (physical.height / pixels.height.toFloat())
             val focalMm = focal[0].toDouble()
+            // The emulator's webcam reports a 1 mm lens. That makes the picture look
+            // about 100 degrees wide, so a marker across the room is scored as too close.
+            if (focalMm < 2.0) {
+                Log.i(TAG, "ignoring placeholder focal length ${focalMm}mm")
+                return
+            }
             val horizontal = 2.0 * atan((widthMm / 2.0) / focalMm)
             val vertical = 2.0 * atan((heightMm / 2.0) / focalMm)
             if (horizontal < Math.toRadians(30.0) || horizontal > Math.toRadians(120.0)) return
@@ -395,13 +529,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun hfovFor(rotation: Int): Double {
-        if (sensorHfov <= 0.0 || sensorVfov <= 0.0) return Math.toRadians(70.0)
-        return if (rotation == 90 || rotation == 270) sensorVfov else sensorHfov
+    private fun hfovFor(rotation: Int, uprightWidth: Int, uprightHeight: Int): Double {
+        return uprightFieldOfView(rotation, uprightWidth, uprightHeight, sensorHfov, sensorVfov)
     }
 
     companion object {
         private const val TAG = "Jiadroid"
         private const val HOLD_MS = 400L
+        private const val BODY_LIKELIHOOD = 0.7f
+        private const val SUBJECT_MARKER = "Marker"
+        private const val SUBJECT_PERSON = "Person"
     }
 }

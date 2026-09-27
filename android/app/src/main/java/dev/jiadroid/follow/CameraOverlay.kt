@@ -10,11 +10,12 @@ import android.view.View
 import androidx.core.content.ContextCompat
 import kotlin.math.max
 
-/** Draws the detected mini-person code on top of the camera preview. */
+/** Draws the detected mini-person code, or the person's torso, on top of the camera preview. */
 class CameraOverlay(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var corners: List<PointF>? = null
     private var imageWidth = 0
     private var imageHeight = 0
+    private var name = ""
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 6f
@@ -27,8 +28,9 @@ class CameraOverlay(context: Context, attrs: AttributeSet?) : View(context, attr
         isFakeBoldText = true
     }
 
-    fun setMarker(corners: List<PointF>?, imageWidth: Int, imageHeight: Int) {
+    fun setMarker(corners: List<PointF>?, imageWidth: Int, imageHeight: Int, name: String) {
         this.corners = corners
+        this.name = name
         this.imageWidth = imageWidth
         this.imageHeight = imageHeight
         invalidate()
@@ -41,13 +43,15 @@ class CameraOverlay(context: Context, attrs: AttributeSet?) : View(context, attr
         val dx = (width - imageWidth * scale) / 2f
         val dy = (height - imageHeight * scale) / 2f
         val path = Path()
-        val mapped = corners.map { PointF(it.x * scale + dx, it.y * scale + dy) }
+        // PreviewView mirrors a front-facing camera, while ImageAnalysis and
+        // ML Kit return unmirrored coordinates.
+        val mapped = corners.map { PointF((imageWidth - it.x) * scale + dx, it.y * scale + dy) }
         mapped.forEachIndexed { index, point ->
             if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
         }
         path.close()
         canvas.drawPath(path, stroke)
         val top = mapped.minBy { it.y }
-        canvas.drawText("mini person", top.x, top.y - 16f, label)
+        canvas.drawText(name, top.x, top.y - 16f, label)
     }
 }
