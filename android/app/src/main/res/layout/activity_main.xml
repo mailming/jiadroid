@@ -30,12 +30,15 @@
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/open_debug"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
-            android:layout_margin="12dp"
-            android:text="@string/debug_mode" />
+            android:layout_marginTop="36dp"
+            android:layout_marginEnd="16dp"
+            android:minWidth="140dp"
+            android:minHeight="56dp"
+            android:text="@string/debug_mode"
+            android:textSize="18sp" />
     </FrameLayout>
 
     <LinearLayout

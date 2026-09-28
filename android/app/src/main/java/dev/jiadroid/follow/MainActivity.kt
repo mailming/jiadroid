@@ -110,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         showDebug(false)
+        binding.eyes.setOnClickListener { showDebug(true) }
         binding.openDebug.setOnClickListener { showDebug(true) }
         binding.closeDebug.setOnClickListener { showDebug(false) }
         binding.connect.setOnClickListener {
@@ -227,7 +228,9 @@ class MainActivity : AppCompatActivity() {
         val lines = ArrayList<String>(talk.size + 1)
         lines.addAll(talk)
         hearing?.let { lines.add(it) }
-        binding.talkLog.text = if (lines.isEmpty()) getString(R.string.talk_empty) else lines.joinToString("\n")
+        val shown = if (lines.isEmpty()) getString(R.string.talk_empty) else lines.joinToString("\n")
+        binding.talkLog.text = shown
+        if (lines.isNotEmpty()) binding.voiceLine.text = lines.last()
         binding.talkScroll.post { binding.talkScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
 
@@ -265,6 +268,10 @@ class MainActivity : AppCompatActivity() {
         binding.debugMode.visibility = android.view.View.VISIBLE
         binding.normalMode.visibility = if (show) android.view.View.GONE else android.view.View.VISIBLE
         if (!show) binding.normalMode.bringToFront()
+        currentFocus?.clearFocus()
+        hideKeyboard()
+        // Showing the camera preview can reset the emulator microphone. Open it again.
+        if (::voice.isInitialized) handler.postDelayed({ voice.reopen() }, 400)
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {

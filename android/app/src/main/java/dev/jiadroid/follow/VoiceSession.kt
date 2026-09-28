@@ -1,16 +1,19 @@
 package dev.jiadroid.follow
 
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
 import org.vosk.android.StorageService
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.max
 
 /**
  * Listens with the phone microphone and speaks the reply. Speech is turned into
@@ -29,11 +32,16 @@ class VoiceSession(
     private val thinker = Executors.newSingleThreadExecutor()
     private var model: Model? = null
     private var loading = false
-    private var ears: SpeechService? = null
+    private var recognizer: Recognizer? = null
+    private var recorder: AudioRecord? = null
+    private var listenThread: Thread? = null
     private var speaker: TextToSpeech? = null
     private var alive = false
     private var speaking = false
     private var readyToSpeak = false
+    private var speakGeneration = 0
+    private var reportedDrop = false
+    private val micLock = Any()
 
     init {
         speaker = TextToSpeech(activity) { status ->
@@ -71,10 +79,20 @@ class VoiceSession(
     fun stop() {
         alive = false
         speaking = false
-        ears?.stop()
-        ears?.shutdown()
-        ears = null
+        speakGeneration += 1
+        closeRecorder()
+        listenThread?.join(500)
+        listenThread = null
+        recognizer?.close()
+        recognizer = null
         speaker?.stop()
+    }
+
+    /** Drop the current recording and open the microphone again. Debug mode can reset the emulator mic. */
+    fun reopen() {
+        if (!alive) return
+        reportedDrop = false
+        closeRecorder()
     }
 
     fun destroy() {
@@ -87,30 +105,118 @@ class VoiceSession(
     }
 
     private fun listen(model: Model) {
-        if (ears != null) return
+        if (listenThread != null) return
         try {
-            ears = SpeechService(Recognizer(model, SAMPLE_RATE), SAMPLE_RATE).also {
-                it.startListening(listener)
-            }
-            onLine("Listening")
+            recognizer = Recognizer(model, SAMPLE_RATE)
         } catch (error: Exception) {
             onLine("Could not open the microphone: ${error.message}")
+            return
+        }
+        val thread = Thread({ pump() }, "jiadroid-mic")
+        listenThread = thread
+        thread.start()
+        onLine("Listening")
+    }
+
+    private fun pump() {
+        val buffer = ShortArray(BUFFER_SAMPLES)
+        while (alive && !Thread.currentThread().isInterrupted) {
+            val rec = openRecorder()
+            if (rec == null) {
+                noteDrop()
+                sleepBriefly()
+                continue
+            }
+            val read = rec.read(buffer, 0, buffer.size)
+            if (read < 0) {
+                Log.i(TAG, "microphone read failed: $read")
+                closeRecorder()
+                noteDrop()
+                continue
+            }
+            if (reportedDrop) {
+                reportedDrop = false
+                activity.runOnUiThread { if (alive && !speaking) onLine("Listening") }
+            }
+            if (speaking || read == 0) continue
+            val heard = accept(buffer, read) ?: continue
+            activity.runOnUiThread {
+                if (!alive || speaking) return@runOnUiThread
+                if (heard.partial) onHearing(heard.text) else answer(heard.text)
+            }
+        }
+        closeRecorder()
+    }
+
+    private fun accept(buffer: ShortArray, read: Int): Heard? {
+        val recognizer = recognizer ?: return null
+        val finished = recognizer.acceptWaveForm(buffer, read)
+        val json = if (finished) recognizer.result else recognizer.partialResult
+        val text = JSONObject(json).optString(if (finished) "text" else "partial")
+        if (text.isBlank()) return null
+        return Heard(text, partial = !finished)
+    }
+
+    private fun openRecorder(): AudioRecord? {
+        synchronized(micLock) {
+            recorder?.let { return it }
+            val min = AudioRecord.getMinBufferSize(SAMPLE_RATE_HZ, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (min <= 0) return null
+            val rec = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                max(min, BUFFER_SAMPLES * 2),
+            )
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                rec.release()
+                return null
+            }
+            rec.startRecording()
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                rec.release()
+                return null
+            }
+            recorder = rec
+            return rec
+        }
+    }
+
+    private fun closeRecorder() {
+        synchronized(micLock) {
+            recorder?.release()
+            recorder = null
+        }
+    }
+
+    private fun noteDrop() {
+        if (reportedDrop) return
+        reportedDrop = true
+        activity.runOnUiThread { if (alive) onLine("Microphone dropped. Listening again.") }
+    }
+
+    private fun sleepBriefly() {
+        try {
+            Thread.sleep(400)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
     private fun resume() {
         speaking = false
+        speakGeneration += 1
         if (!alive) return
-        ears?.setPause(false)
         onLine("Listening")
     }
 
     /** Answers [heard] as if it came from the microphone. Typed lines in Debug use this too. */
     fun answer(heard: String) {
         if (speaking) return
+        if (isNoise(heard)) return
         onTurn("You", heard)
         speaking = true
-        ears?.setPause(true)
         val seen = seeing()
         val brain = brain
         if (brain == null) {
@@ -133,34 +239,32 @@ class VoiceSession(
         onTurn("Me", spoken)
         onLine(spoken)
         val speaker = speaker
-        if (!readyToSpeak || speaker == null) {
+        val generation = ++speakGeneration
+        if (!readyToSpeak || speaker == null ||
+            speaker.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "reply") == TextToSpeech.ERROR
+        ) {
             onTurn("Voice", "text to speech is not ready")
             resume()
             return
         }
-        speaker.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "reply")
+        activity.window.decorView.postDelayed({
+            if (speaking && generation == speakGeneration) resume()
+        }, SPEAK_LIMIT_MS)
     }
 
-    private val listener = object : RecognitionListener {
-        override fun onPartialResult(hypothesis: String?) {
-            val partial = hypothesis?.let { JSONObject(it).optString("partial") }.orEmpty()
-            if (partial.isNotBlank() && !speaking) onHearing(partial)
-        }
-
-        override fun onResult(hypothesis: String?) {
-            val heard = hypothesis?.let { JSONObject(it).optString("text") }.orEmpty()
-            if (heard.isNotBlank() && !speaking) answer(heard)
-        }
-
-        override fun onFinalResult(hypothesis: String?) {}
-        override fun onTimeout() {}
-
-        override fun onError(exception: Exception?) {
-            onLine("Listening failed: ${exception?.message}")
-        }
+    private fun isNoise(heard: String): Boolean {
+        val words = heard.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+        return words.isEmpty() || words.all { it in NOISE }
     }
+
+    private data class Heard(val text: String, val partial: Boolean)
 
     private companion object {
+        const val TAG = "Jiadroid"
         const val SAMPLE_RATE = 16000f
+        const val SAMPLE_RATE_HZ = 16000
+        const val BUFFER_SAMPLES = 1600
+        const val SPEAK_LIMIT_MS = 8000L
+        val NOISE = setOf("huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an")
     }
 }
