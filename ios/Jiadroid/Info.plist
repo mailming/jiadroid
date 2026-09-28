@@ -23,14 +23,15 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>The camera looks for the printed mini person.</string>
+	<string>The camera looks for a person or the printed mini person.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>The app sends walk commands to the duck simulator on your Wi-Fi.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
-		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 </dict>
 </plist>

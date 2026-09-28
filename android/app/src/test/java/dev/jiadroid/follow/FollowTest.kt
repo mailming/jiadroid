@@ -108,6 +108,17 @@ class FollowTest {
     }
 
     @Test
+    fun greetingIsSpokenBack() {
+        assertEquals("Hello. I can see you, and I can hear you.", reply("hello there", "Person is centered"))
+    }
+
+    @Test
+    fun askingWhatItSeesUsesTheCamera() {
+        assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost"))
+        assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left"))
+    }
+
+    @Test
     fun duckWalksForwardInItsFacingDirection() {
         val pose = Pose(0f, 0f, (PI / 2.0).toFloat())
         stepPose(pose, 0.1f, 0f, 0f, 1f)

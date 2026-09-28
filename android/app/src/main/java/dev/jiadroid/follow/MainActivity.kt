@@ -69,6 +69,10 @@ class MainActivity : AppCompatActivity() {
     private var gait = 0f
 
     private var subject = SUBJECT_MARKER
+    private var situationText = "Marker is lost"
+    private lateinit var voice: VoiceSession
+    private val talk = ArrayDeque<String>()
+    private var hearing: String? = null
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -78,8 +82,13 @@ class MainActivity : AppCompatActivity() {
         PoseDetectorOptions.Builder().setDetectorMode(PoseDetectorOptions.STREAM_MODE).build(),
     )
 
-    private val requestCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera() else binding.link.text = getString(R.string.camera_denied)
+    private val requestSenses = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants[Manifest.permission.CAMERA] == true) startCamera() else binding.link.text = getString(R.string.camera_denied)
+        if (grants[Manifest.permission.RECORD_AUDIO] == true) {
+            if (ticking) voice.start()
+        } else {
+            binding.voiceLine.text = getString(R.string.mic_denied)
+        }
     }
 
     private val tick = object : Runnable {
@@ -114,10 +123,35 @@ class MainActivity : AppCompatActivity() {
                 false
             }
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+        voice = VoiceSession(
+            this,
+            seeing = { situationText },
+            onLine = { binding.voiceLine.text = it },
+            onTurn = ::logTurn,
+            onHearing = ::logHearing,
+        )
+        binding.saySend.setOnClickListener { sayTyped() }
+        binding.say.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sayTyped()
+                true
+            } else {
+                false
+            }
+        }
+        val prefs = getPreferences(MODE_PRIVATE)
+        binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, ""))
+        binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, ""))
+        binding.brainKey.setText(prefs.getString(PREF_BRAIN_KEY, ""))
+        binding.brainUse.setOnClickListener { useBrain(save = true) }
+        useBrain(save = false)
+        val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (needed.isEmpty()) {
             startCamera()
         } else {
-            requestCamera.launch(Manifest.permission.CAMERA)
+            requestSenses.launch(needed.toTypedArray())
         }
     }
 
@@ -126,11 +160,15 @@ class MainActivity : AppCompatActivity() {
         ticking = true
         lastTickNs = 0L
         handler.post(tick)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voice.start()
+        }
     }
 
     override fun onPause() {
         ticking = false
         handler.removeCallbacks(tick)
+        if (::voice.isInitialized) voice.stop()
         send(decide(Scene(false, 0f, 0f)), force = true)
         super.onPause()
     }
@@ -139,6 +177,7 @@ class MainActivity : AppCompatActivity() {
         val robot = link.getAndSet(null)
         if (robot != null) release(robot)
         cameraProvider?.unbindAll()
+        if (::voice.isInitialized) voice.destroy()
         scanner.close()
         bodies.close()
         cameraExecutor.shutdown()
@@ -163,6 +202,63 @@ class MainActivity : AppCompatActivity() {
         send(decision, force = false)
     }
 
+    private fun logTurn(who: String, text: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { logTurn(who, text) }
+            return
+        }
+        hearing = null
+        talk.addLast("$who: $text")
+        while (talk.size > TALK_LINES) talk.removeFirst()
+        showTalk()
+    }
+
+    private fun logHearing(text: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            handler.post { logHearing(text) }
+            return
+        }
+        hearing = "Hearing: $text"
+        binding.voiceLine.text = hearing
+        showTalk()
+    }
+
+    private fun showTalk() {
+        val lines = ArrayList<String>(talk.size + 1)
+        lines.addAll(talk)
+        hearing?.let { lines.add(it) }
+        binding.talkLog.text = if (lines.isEmpty()) getString(R.string.talk_empty) else lines.joinToString("\n")
+        binding.talkScroll.post { binding.talkScroll.fullScroll(android.view.View.FOCUS_DOWN) }
+    }
+
+    private fun sayTyped() {
+        val text = binding.say.text?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) return
+        binding.say.text = null
+        hideKeyboard()
+        voice.answer(text)
+    }
+
+    private fun useBrain(save: Boolean) {
+        val url = binding.brainUrl.text?.toString()?.trim().orEmpty()
+        val model = binding.brainModel.text?.toString()?.trim().orEmpty()
+        val key = binding.brainKey.text?.toString()?.trim().orEmpty()
+        if (save) {
+            getPreferences(MODE_PRIVATE).edit()
+                .putString(PREF_BRAIN_URL, url)
+                .putString(PREF_BRAIN_MODEL, model)
+                .putString(PREF_BRAIN_KEY, key)
+                .apply()
+            hideKeyboard()
+        }
+        voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
+        binding.brainStatus.text = if (voice.brain == null) {
+            getString(R.string.brain_local)
+        } else {
+            getString(R.string.brain_on, model, url)
+        }
+    }
+
     private fun showDebug(show: Boolean) {
         // Keep Debug mode laid out behind the eyes. CameraX needs PreviewView's
         // surface even when the user only sees the normal eyes screen.
@@ -173,6 +269,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun show(decision: FollowDecision, scene: Scene) {
         val moving = decision.command != "STOP"
+        situationText = decision.situation
         binding.situation.text = decision.situation
         binding.command.text = decision.command
         binding.command.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
@@ -306,7 +403,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideKeyboard() {
         val imm = getSystemService(InputMethodManager::class.java)
-        imm?.hideSoftInputFromWindow(binding.host.windowToken, 0)
+        imm?.hideSoftInputFromWindow(binding.root.windowToken, 0)
     }
 
     private fun startCamera() {
@@ -539,5 +636,9 @@ class MainActivity : AppCompatActivity() {
         private const val BODY_LIKELIHOOD = 0.7f
         private const val SUBJECT_MARKER = "Marker"
         private const val SUBJECT_PERSON = "Person"
+        private const val TALK_LINES = 40
+        private const val PREF_BRAIN_URL = "brain_url"
+        private const val PREF_BRAIN_MODEL = "brain_model"
+        private const val PREF_BRAIN_KEY = "brain_key"
     }
 }

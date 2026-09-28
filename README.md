@@ -116,9 +116,9 @@ Escape closes the window.
 
 ## Try it on a phone
 
-The Android app follows a real person, a printed photo of a person, or a printed mini-person QR code. The QR code wins when both are in view. The phone's front camera finds its target and decides the walk command. The app runs in landscape. By default the screen shows a pair of eyes that look toward the person. Tap Debug to see the camera, the walk command, and a simulated duck. The same command can be sent to the laptop simulator. The iOS app still uses the back camera.
+The Android app follows a real person, a printed photo of a person, or a printed mini-person QR code. The QR code wins when both are in view. The phone's front camera finds its target and decides the walk command. The app runs in landscape. By default the screen shows a pair of eyes that look toward the person. The Android app also listens on the microphone and speaks a reply. Tap Debug to see the camera, the conversation, the walk command, and a simulated duck. The same command can be sent to the laptop simulator. The Android and iOS apps work the same way.
 
-1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match. The iOS app follows only the QR marker so far.
+1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match.
 2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
 3. Point the camera at the target. Center it and the duck walks forward. Move it to either side and the duck turns. Come too close, or leave the view, and the duck stops.
 4. To drive the laptop simulator as well, start it where the phone can reach it, then enter that address in the app and tap Connect.
@@ -137,12 +137,11 @@ The phone and the laptop need to be on the same Wi-Fi. The simulator prints the 
 - A simulated Open Duck Mini that announces its 14 servos and accepts walk commands.
 - Follow Me logic that decides where the robot should go.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that track a printed mini-person marker, move a simulated duck on the phone, and can send that same walk command to the laptop simulator. The Android app also follows a real person, or a printed photo of one, by body pose.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, with the camera and simulated duck on a Debug screen, and both can send the walk command to the laptop simulator.
 
 ## What is not built yet
 
-- Person following on iOS. The iOS app still needs the printed QR marker.
-- Telling people apart. With several people in view, the Android app follows whichever one the pose detector picks.
+- Telling people apart. With several people in view, the phone follows whichever one the pose detector picks.
 - A dock that mounts the phone on the duck, and a connection to a real Open Duck Mini. The next step is to feed the phone's walk command into the duck's existing walking software, in place of its game controller.
 - Bluetooth and USB connections. The phone reaches the simulator over the network.
 - A second robot body, such as a robot vacuum or a robot dog, to prove that one phone can drive very different machines.

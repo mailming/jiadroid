@@ -13,6 +13,10 @@ final class FollowSession: ObservableObject, CameraSink {
     private let linkLock = NSLock()
     private let widthLock = NSLock()
     private var widthMeters: Float = markerWidthMM / 1000
+    private var heightMeters: Float = personHeightMM / 1000
+    private var subject = "Marker"
+    private var lookX: Float = 0
+    private var lookY: Float = 0
     private var robot: RobotClient?
     private var timer: Timer?
     private var lastTick = Date()
@@ -29,6 +33,12 @@ final class FollowSession: ObservableObject, CameraSink {
             self.widthLock.lock()
             defer { self.widthLock.unlock() }
             return self.widthMeters
+        }
+        camera.personHeightMeters = { [weak self] in
+            guard let self else { return personHeightMM / 1000 }
+            self.widthLock.lock()
+            defer { self.widthLock.unlock() }
+            return self.heightMeters
         }
         resume()
     }
@@ -49,7 +59,7 @@ final class FollowSession: ObservableObject, CameraSink {
         ticking = false
         timer?.invalidate()
         timer = nil
-        send(decide(Scene(visible: false, angle: 0, distance: 0)), force: true)
+        send(decide(Scene(visible: false, angle: 0, distance: 0), subject: subject), force: true)
     }
 
     func stop() {
@@ -66,12 +76,21 @@ final class FollowSession: ObservableObject, CameraSink {
         }
     }
 
-    func cameraDidMeasure(_ measured: Scene, corners: [CGPoint], imageSize: CGSize, hfov: Double) {
-        sim.scene = smoothScene(previous: sim.scene, measured: measured)
+    func cameraDidMeasure(_ sighting: Sighting) {
+        if sighting.subject == "Person", subject == "Marker", sim.scene.visible, Date().timeIntervalSince(lastMarkerAt) < 0.4 {
+            return
+        }
+        if sighting.subject != subject {
+            subject = sighting.subject
+            sim.scene = Scene(visible: false, angle: 0, distance: 0)
+        }
+        sim.scene = smoothScene(previous: sim.scene, measured: sighting.scene)
         lastMarkerAt = Date()
-        sim.corners = corners
-        sim.imageSize = imageSize
-        sim.hfov = Float(hfov)
+        sim.corners = sighting.corners
+        sim.imageSize = sighting.imageSize
+        sim.hfov = Float(sighting.hfov)
+        sim.gazeY = sighting.gazeY
+        sim.label = sighting.label
         link.cameraMessage = nil
     }
 
@@ -82,8 +101,10 @@ final class FollowSession: ObservableObject, CameraSink {
     private func tick() {
         guard ticking else { return }
         let meters = parsedMarkerWidthMeters()
+        let height = parsedPersonHeightMeters()
         widthLock.lock()
         widthMeters = meters
+        heightMeters = height
         widthLock.unlock()
         let now = Date()
         let dt = Float(min(0.2, now.timeIntervalSince(lastTick)))
@@ -93,12 +114,24 @@ final class FollowSession: ObservableObject, CameraSink {
         if !fresh {
             sim.scene = shown
             sim.corners = []
+            sim.gazeY = 0
         }
-        let decision = decide(shown)
+        let decision = decide(shown, subject: subject)
         sim.gait = decision.command == "STOP" ? 0 : sim.gait + dt * 7
         stepPose(&sim.pose, forward: decision.forward, lateral: decision.lateral, yaw: decision.yaw, dt: dt)
         sim.trail.append((sim.pose.x, sim.pose.y))
         if sim.trail.count > 80 { sim.trail.removeFirst(sim.trail.count - 80) }
+        let targetX: Float
+        switch decision.command {
+        case "TURN LEFT": targetX = 1
+        case "TURN RIGHT": targetX = -1
+        default: targetX = -min(1, max(-1, decision.headYaw / 0.5))
+        }
+        let vertical: Float = shown.visible ? sim.gazeY : 0
+        lookX += (targetX - lookX) * 0.35
+        lookY += (vertical - lookY) * 0.25
+        sim.lookX = lookX
+        sim.lookY = lookY
         show(decision, shown)
         send(decision, force: false)
     }
@@ -107,7 +140,7 @@ final class FollowSession: ObservableObject, CameraSink {
         status.situation = decision.situation
         status.command = decision.command
         status.moving = decision.command != "STOP"
-        let range = scene.visible ? String(format: "%.2f m", scene.distance) : "no marker"
+        let range = scene.visible ? String(format: "%.2f m", scene.distance) : "nothing seen"
         let place = currentRobot()?.safety ?? "phone sim"
         status.detail = String(
             format: "forward %.2f m/s   turn %.2f rad/s   head %.2f   %@   %@",
@@ -189,7 +222,7 @@ final class FollowSession: ObservableObject, CameraSink {
         let robot = swapRobot(nil)
         lastCommandKey = nil
         link.connected = false
-        link.linkText = "Not connected. The duck above still follows the marker."
+        link.linkText = "Not connected. The duck above still follows what the camera sees."
         if let robot { release(robot) }
     }
 
@@ -248,6 +281,12 @@ final class FollowSession: ObservableObject, CameraSink {
         if mm < 10 || mm > 300 { return markerWidthMM / 1000 }
         return mm / 1000
     }
+
+    private func parsedPersonHeightMeters() -> Float {
+        let mm = Float(link.personMM) ?? personHeightMM
+        if mm < 100 || mm > 2500 { return personHeightMM / 1000 }
+        return mm / 1000
+    }
 }
 
 final class SimModel: ObservableObject {
@@ -258,6 +297,10 @@ final class SimModel: ObservableObject {
     @Published var trail: [(Float, Float)] = []
     @Published var corners: [CGPoint] = []
     @Published var imageSize = CGSize.zero
+    @Published var gazeY: Float = 0
+    @Published var lookX: Float = 0
+    @Published var lookY: Float = 0
+    @Published var label = ""
 }
 
 final class StatusModel: ObservableObject {
@@ -269,8 +312,9 @@ final class StatusModel: ObservableObject {
 
 final class LinkModel: ObservableObject {
     @Published var host = ""
-    @Published var markerMM = "60"
-    @Published var linkText = "Not connected. The duck above still follows the marker."
+    @Published var markerMM = "120"
+    @Published var personMM = "1700"
+    @Published var linkText = "Not connected. The duck above still follows what the camera sees."
     @Published var connected = false
     @Published var connecting = false
     @Published var cameraMessage: String?

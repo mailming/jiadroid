@@ -41,7 +41,7 @@ struct DuckSimView: View {
                 anchor: .bottomLeading
             )
         }
-        .accessibilityLabel("Simulated duck following the marker")
+        .accessibilityLabel("Simulated duck following the person")
     }
 
     private func drawGrid(_ context: GraphicsContext, _ size: CGSize, _ world: (Float, Float) -> CGPoint) {
@@ -93,7 +93,7 @@ struct DuckSimView: View {
         let mark = Path(ellipseIn: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
         context.fill(mark, with: .color(Color.person))
         context.draw(
-            Text("marker").font(.system(size: 12)).foregroundStyle(Color.person),
+            Text("target").font(.system(size: 12)).foregroundStyle(Color.person),
             at: CGPoint(x: point.x, y: point.y - 14),
             anchor: .bottom
         )

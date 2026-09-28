@@ -16,6 +16,17 @@
     <string name="debug_mode">Debug</string>
     <string name="normal_mode">Eyes</string>
     <string name="eyes_description">Animated robot eyes looking toward the person</string>
+    <string name="listening">Listening</string>
+    <string name="mic_denied">Microphone permission is required to listen.</string>
+    <string name="talk_empty">What you say and what it answers shows here.</string>
+    <string name="say_hint">Type what you would say</string>
+    <string name="say">Say</string>
+    <string name="brain_url_hint">Model URL, e.g. http://10.0.2.2:11434/v1</string>
+    <string name="brain_model_hint">Model</string>
+    <string name="brain_key_hint">API key</string>
+    <string name="brain_use">Use</string>
+    <string name="brain_local">Replies come from the phone. Add a model URL for real conversation.</string>
+    <string name="brain_on">Replies come from %1$s at %2$s.</string>
     <string name="link_idle">Not connected. The duck above still follows what the camera sees.</string>
     <string name="need_address">Enter the laptop address, or use the phone simulator alone.</string>
     <string name="sim_description">Simulated duck following the marker</string>

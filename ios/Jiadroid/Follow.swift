@@ -1,9 +1,18 @@
 import Foundation
 
-/// Printed width of the mini-person code, in millimeters.
-let markerWidthMM: Float = 60
+/// Printed width of the mini-person code, in millimeters. The large sheet is 120.
+let markerWidthMM: Float = 120
 
 let markerPayload = "jiadroid:person"
+
+/// Standing height of the person to follow, in millimeters. An adult is about 1700.
+let personHeightMM: Float = 1700
+
+/// Shoulder joint to shoulder joint, as a share of standing height.
+private let shoulderShare: Float = 0.22
+
+/// Shoulder midpoint to hip midpoint, as a share of standing height.
+private let torsoShare: Float = 0.29
 
 private let alignRad: Float = 0.28
 private let closeM: Float = 0.40
@@ -54,6 +63,63 @@ func measure(
     return Scene(visible: true, angle: angle, distance: distance)
 }
 
+struct LandmarkPoint {
+    var x: Float
+    var y: Float
+
+    func distance(to other: LandmarkPoint) -> Float {
+        hypot(other.x - x, other.y - y)
+    }
+}
+
+/// Reads a person from body landmarks in upright image pixels.
+///
+/// Distance comes from shoulder width and from torso length, whichever says
+/// closer. A person turned sideways has narrow shoulders but the same torso,
+/// so they are never mistaken for someone far away.
+func measurePerson(
+    shoulders: (LandmarkPoint, LandmarkPoint),
+    hips: (LandmarkPoint, LandmarkPoint)?,
+    imageWidth: Int,
+    hfovRad: Double,
+    personHeightM: Float
+) -> Scene {
+    if imageWidth <= 0 || personHeightM <= 0 { return Scene(visible: false, angle: 0, distance: 0) }
+    if hfovRad <= 0.2 || hfovRad >= 2.8 { return Scene(visible: false, angle: 0, distance: 0) }
+    let fx = (Double(imageWidth) / 2.0) / tan(hfovRad / 2.0)
+    let shoulderPx = shoulders.0.distance(to: shoulders.1)
+    let top = LandmarkPoint(
+        x: (shoulders.0.x + shoulders.1.x) / 2,
+        y: (shoulders.0.y + shoulders.1.y) / 2
+    )
+    var distance = Float.greatestFiniteMagnitude
+    if shoulderPx >= 8 {
+        distance = Float(Double(personHeightM * shoulderShare) * fx / Double(shoulderPx))
+    }
+    if let hips {
+        let bottom = LandmarkPoint(x: (hips.0.x + hips.1.x) / 2, y: (hips.0.y + hips.1.y) / 2)
+        let torsoPx = top.distance(to: bottom)
+        if torsoPx >= 8 {
+            distance = min(distance, Float(Double(personHeightM * torsoShare) * fx / Double(torsoPx)))
+        }
+    }
+    if distance < 0.05 || distance > 8 { return Scene(visible: false, angle: 0, distance: 0) }
+    let angle = Float(atan(Double(top.x - Float(imageWidth) / 2) / fx))
+    return Scene(visible: true, angle: angle, distance: distance)
+}
+
+func uprightFieldOfView(rotation: Int, uprightWidth: Int, uprightHeight: Int) -> Double {
+    let longFov = 70.0 * Double.pi / 180.0
+    if uprightWidth <= 0 || uprightHeight <= 0 { return longFov }
+    let portrait = rotation == 90 || rotation == 270
+    let shortOverLong = portrait
+        ? Double(uprightWidth) / Double(uprightHeight)
+        : Double(uprightHeight) / Double(uprightWidth)
+    let clamped = min(1.0, max(0.3, shortOverLong))
+    let shortFov = 2.0 * atan(tan(longFov / 2.0) * clamped)
+    return portrait ? shortFov : longFov
+}
+
 func smoothScene(previous: Scene, measured: Scene) -> Scene {
     if !measured.visible || !previous.visible { return measured }
     return Scene(
@@ -63,23 +129,23 @@ func smoothScene(previous: Scene, measured: Scene) -> Scene {
     )
 }
 
-func decide(_ scene: Scene) -> FollowDecision {
-    if !scene.visible { return stopped("Marker is lost") }
-    if scene.distance < closeM { return stopped("Marker is too close") }
+func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
+    if !scene.visible { return stopped("\(subject) is lost") }
+    if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
     if scene.angle < -alignRad {
-        return FollowDecision(situation: "Marker is left", command: "TURN LEFT", forward: 0.04, lateral: 0, yaw: 0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.04, lateral: 0, yaw: 0.8, headYaw: headYaw)
     }
     if scene.angle > alignRad {
-        return FollowDecision(situation: "Marker is right", command: "TURN RIGHT", forward: 0.04, lateral: 0, yaw: -0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.04, lateral: 0, yaw: -0.8, headYaw: headYaw)
     }
     if scene.distance > farM {
-        return FollowDecision(situation: "Marker is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
     }
     if scene.distance < slowM {
-        return FollowDecision(situation: "Marker is centered", command: "SLOW DOWN", forward: 0.05, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.05, lateral: 0, yaw: 0, headYaw: headYaw)
     }
-    return FollowDecision(situation: "Marker is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
+    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
 }
 
 func stepPose(_ pose: inout Pose, forward: Float, lateral: Float, yaw: Float, dt: Float) {
@@ -154,6 +220,33 @@ enum FollowLogicTests {
         try expect(abs(scene.distance - 0.43) < 0.03, "measured distance \(scene.distance)")
 
         try expect(!measure(centerX: 500, widthPx: 4, imageWidth: 1000, hfovRad: hfov, markerWidthM: 0.06).visible, "tiny code")
+
+        let personFov = uprightFieldOfView(rotation: 90, uprightWidth: 960, uprightHeight: 1280)
+        let fx = 480.0 / tan(personFov / 2.0)
+        let shoulderPx = Float(1.7 * 0.22 * fx / 3.0)
+        let torsoPx = Float(1.7 * 0.29 * fx / 3.0)
+        let shoulders = (
+            LandmarkPoint(x: 480 - shoulderPx / 2, y: 400),
+            LandmarkPoint(x: 480 + shoulderPx / 2, y: 400)
+        )
+        let hips = (
+            LandmarkPoint(x: 470, y: 400 + torsoPx),
+            LandmarkPoint(x: 490, y: 400 + torsoPx)
+        )
+        let adult = measurePerson(shoulders: shoulders, hips: hips, imageWidth: 960, hfovRad: personFov, personHeightM: 1.7)
+        try expect(adult.visible, "adult visible")
+        try expect(abs(adult.distance - 3) < 0.05, "adult distance \(adult.distance)")
+        try expect(decide(adult, subject: "Person").situation == "Person is too far", "adult far")
+
+        let sideTorso = Float(1.7 * 0.29 * fx / 0.3)
+        let side = measurePerson(
+            shoulders: (LandmarkPoint(x: 470, y: 100), LandmarkPoint(x: 490, y: 100)),
+            hips: (LandmarkPoint(x: 470, y: 100 + sideTorso), LandmarkPoint(x: 490, y: 100 + sideTorso)),
+            imageWidth: 960,
+            hfovRad: personFov,
+            personHeightM: 1.7
+        )
+        try expect(decide(side, subject: "Person").situation == "Person is too close", "sideways close")
 
         var pose = Pose(x: 0, y: 0, heading: Float.pi / 2)
         stepPose(&pose, forward: 0.1, lateral: 0, yaw: 0, dt: 1)

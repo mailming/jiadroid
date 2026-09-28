@@ -18,6 +18,16 @@
             android:layout_height="match_parent"
             android:contentDescription="@string/eyes_description" />
 
+        <TextView
+            android:id="@+id/voice_line"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="28dp"
+            android:text="@string/listening"
+            android:textColor="@color/ink"
+            android:textSize="16sp" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/open_debug"
             style="@style/Widget.MaterialComponents.Button.TextButton"
@@ -81,6 +91,60 @@
                     android:focusable="false"
                     android:importantForAccessibility="no" />
             </FrameLayout>
+
+            <TextView
+                android:id="@+id/brain_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/brain_local"
+                android:textColor="@color/muted"
+                android:textSize="12sp" />
+
+            <ScrollView
+                android:id="@+id/talk_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:fillViewport="true"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/talk_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/talk_empty"
+                    android:textColor="@color/ink"
+                    android:textSize="14sp" />
+            </ScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/say"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/say_hint"
+                    android:imeOptions="actionSend"
+                    android:importantForAutofill="no"
+                    android:inputType="text"
+                    android:maxLines="1"
+                    android:textColor="@color/ink"
+                    android:textColorHint="@color/muted" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/say_send"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/say" />
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
@@ -211,6 +275,61 @@
                 android:text="@string/millimeters"
                 android:textColor="@color/muted"
                 android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/brain_url"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:hint="@string/brain_url_hint"
+                android:importantForAutofill="no"
+                android:inputType="textUri"
+                android:maxLines="1"
+                android:textColor="@color/ink"
+                android:textColorHint="@color/muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/brain_model"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:hint="@string/brain_model_hint"
+                android:importantForAutofill="no"
+                android:inputType="textNoSuggestions"
+                android:maxLines="1"
+                android:textColor="@color/ink"
+                android:textColorHint="@color/muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/brain_key"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:hint="@string/brain_key_hint"
+                android:importantForAutofill="no"
+                android:inputType="textPassword"
+                android:maxLines="1"
+                android:textColor="@color/ink"
+                android:textColorHint="@color/muted"
+                android:textSize="13sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/brain_use"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/brain_use" />
         </LinearLayout>
 
         <TextView
