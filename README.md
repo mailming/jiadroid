@@ -116,7 +116,7 @@ Escape closes the window.
 
 ## Try it on a phone
 
-The Android app follows a real person, a printed photo of a person, or a printed mini-person QR code. The QR code wins when both are in view. The phone's front camera finds its target and decides the walk command. The app runs in landscape. By default the screen shows a pair of eyes that look toward the person. The Android app also listens on the microphone and speaks a reply. Tap Debug to see the camera, the conversation, the walk command, and a simulated duck. The same command can be sent to the laptop simulator. The Android and iOS apps work the same way.
+The Android and iOS apps follow a real person, a printed photo of a person, or a printed mini-person QR code. The QR code wins when both are in view. The phone's front camera finds its target and decides the walk command. The apps run in landscape. By default the screen shows a pair of eyes that look toward the person. Both apps also listen on the microphone and speak a reply. Tap Debug to see the camera, the conversation, the walk command, and a simulated duck. The same command can be sent to the laptop simulator.
 
 1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match.
 2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
@@ -137,7 +137,7 @@ The phone and the laptop need to be on the same Wi-Fi. The simulator prints the 
 - A simulated Open Duck Mini that announces its 14 servos and accepts walk commands.
 - Follow Me logic that decides where the robot should go.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, with the camera and simulated duck on a Debug screen, and both can send the walk command to the laptop simulator.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, listen and answer out loud, keep the conversation on a Debug screen with the camera and simulated duck, and can send the walk command to the laptop simulator.
 
 ## What is not built yet
 

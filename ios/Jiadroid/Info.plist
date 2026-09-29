@@ -24,8 +24,17 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera looks for a person or the printed mini person.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>The microphone listens so the phone can answer when you talk.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Speech recognition turns what you say into text on the phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>The app sends walk commands to the duck simulator on your Wi-Fi.</string>
+	<string>The app sends walk commands to the duck simulator on your Wi-Fi, and can reach a language model on your laptop.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

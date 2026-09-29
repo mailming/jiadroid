@@ -16,6 +16,9 @@
 		BA0008 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0008 /* Theme.swift */; };
 		BA0009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA000C /* Assets.xcassets */; };
 		BA000A /* FollowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000A /* FollowTests.swift */; };
+		BA000B /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000B /* Conversation.swift */; };
+		BA000D /* Brain.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000D /* Brain.swift */; };
+		BA000E /* VoiceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000E /* VoiceSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -38,7 +41,10 @@
 		FA0007 /* DuckSimView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuckSimView.swift; sourceTree = "<group>"; };
 		FA0008 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		FA0009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FA000B /* Conversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
 		FA000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		FA000D /* Brain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brain.swift; sourceTree = "<group>"; };
+		FA000E /* VoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSession.swift; sourceTree = "<group>"; };
 		FA000A /* FollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowTests.swift; sourceTree = "<group>"; };
 		R00001 /* Jiadroid.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiadroid.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		R00002 /* JiadroidTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JiadroidTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -67,6 +73,9 @@
 			children = (
 				FA0001 /* JiadroidApp.swift */,
 				FA0002 /* Follow.swift */,
+				FA000B /* Conversation.swift */,
+				FA000D /* Brain.swift */,
+				FA000E /* VoiceSession.swift */,
 				FA0003 /* RobotClient.swift */,
 				FA0004 /* FollowSession.swift */,
 				FA0005 /* CameraSession.swift */,
@@ -197,6 +206,9 @@
 			files = (
 				BA0001 /* JiadroidApp.swift in Sources */,
 				BA0002 /* Follow.swift in Sources */,
+				BA000B /* Conversation.swift in Sources */,
+				BA000D /* Brain.swift in Sources */,
+				BA000E /* VoiceSession.swift in Sources */,
 				BA0003 /* RobotClient.swift in Sources */,
 				BA0004 /* FollowSession.swift in Sources */,
 				BA0005 /* CameraSession.swift in Sources */,

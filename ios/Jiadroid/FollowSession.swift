@@ -7,6 +7,7 @@ final class FollowSession: ObservableObject, CameraSink {
     let sim = SimModel()
     let status = StatusModel()
     let link = LinkModel()
+    let voice = VoiceModel()
     let camera = CameraSession()
 
     private let io = DispatchQueue(label: "dev.jiadroid.io")
@@ -25,6 +26,9 @@ final class FollowSession: ObservableObject, CameraSink {
     private var lastSendAt = Date.distantPast
     private var ticking = false
     private var connectGeneration = 0
+    private var voiceSession: VoiceSession?
+    private var talk: [String] = []
+    private var hearing: String?
 
     func start() {
         camera.sink = self
@@ -40,6 +44,15 @@ final class FollowSession: ObservableObject, CameraSink {
             defer { self.widthLock.unlock() }
             return self.heightMeters
         }
+        if voiceSession == nil {
+            voiceSession = VoiceSession(
+                seeing: { [weak self] in self?.status.situation ?? "Marker is lost" },
+                onLine: { [weak self] line in self?.voice.line = line },
+                onTurn: { [weak self] who, text in self?.logTurn(who, text) },
+                onHearing: { [weak self] text in self?.logHearing(text) }
+            )
+            loadBrain(save: false)
+        }
         resume()
     }
 
@@ -53,19 +66,41 @@ final class FollowSession: ObservableObject, CameraSink {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        voiceSession?.start()
     }
 
     func pause() {
         ticking = false
         timer?.invalidate()
         timer = nil
+        voiceSession?.stop()
         send(decide(Scene(visible: false, angle: 0, distance: 0), subject: subject), force: true)
     }
 
     func stop() {
         pause()
         camera.stop()
+        voiceSession?.destroy()
+        voiceSession = nil
         disconnect()
+    }
+
+    func sayTyped() {
+        let text = voice.say.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return }
+        voice.say = ""
+        voiceSession?.answer(text)
+    }
+
+    func useBrain(save: Bool) {
+        loadBrain(save: save)
+    }
+
+    /// Showing the camera preview can reset the microphone. Open it again.
+    func reopenMic() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.voiceSession?.reopen()
+        }
     }
 
     func toggleLink() {
@@ -287,6 +322,58 @@ final class FollowSession: ObservableObject, CameraSink {
         if mm < 100 || mm > 2500 { return personHeightMM / 1000 }
         return mm / 1000
     }
+
+    private func logTurn(_ who: String, _ text: String) {
+        hearing = nil
+        talk.append("\(who): \(text)")
+        while talk.count > Self.talkLines { talk.removeFirst() }
+        showTalk()
+    }
+
+    private func logHearing(_ text: String) {
+        hearing = "Hearing: \(text)"
+        voice.line = hearing ?? text
+        showTalk()
+    }
+
+    private func showTalk() {
+        var lines = talk
+        if let hearing { lines.append(hearing) }
+        voice.talkLog = lines.isEmpty
+            ? "What you say and what it answers shows here."
+            : lines.joined(separator: "\n")
+        if let last = lines.last {
+            voice.line = last
+        }
+    }
+
+    private func loadBrain(save: Bool) {
+        let defaults = UserDefaults.standard
+        if save {
+            defaults.set(voice.brainURL, forKey: Self.prefBrainURL)
+            defaults.set(voice.brainModel, forKey: Self.prefBrainModel)
+            defaults.set(voice.brainKey, forKey: Self.prefBrainKey)
+        } else {
+            voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? ""
+            voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? ""
+            voice.brainKey = defaults.string(forKey: Self.prefBrainKey) ?? ""
+        }
+        let url = voice.brainURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = voice.brainModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = voice.brainKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if url.isEmpty || model.isEmpty {
+            voiceSession?.brain = nil
+            voice.brainStatus = "Replies come from the phone. Add a model URL for real conversation."
+        } else {
+            voiceSession?.brain = Brain(baseURL: url, model: model, key: key)
+            voice.brainStatus = "Replies come from \(model) at \(url)."
+        }
+    }
+
+    private static let talkLines = 40
+    private static let prefBrainURL = "brain_url"
+    private static let prefBrainModel = "brain_model"
+    private static let prefBrainKey = "brain_key"
 }
 
 final class SimModel: ObservableObject {
@@ -318,4 +405,14 @@ final class LinkModel: ObservableObject {
     @Published var connected = false
     @Published var connecting = false
     @Published var cameraMessage: String?
+}
+
+final class VoiceModel: ObservableObject {
+    @Published var line = "Listening"
+    @Published var talkLog = "What you say and what it answers shows here."
+    @Published var say = ""
+    @Published var brainURL = ""
+    @Published var brainModel = ""
+    @Published var brainKey = ""
+    @Published var brainStatus = "Replies come from the phone. Add a model URL for real conversation."
 }

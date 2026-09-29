@@ -12,8 +12,8 @@ struct ContentView: View {
             Color.paper.ignoresSafeArea()
             debugLayout
             if !showDebug {
-                EyesScreen(sim: session.sim, status: session.status) {
-                    showDebug = true
+                EyesScreen(sim: session.sim, status: session.status, voice: session.voice) {
+                    setDebug(true)
                 }
             }
         }
@@ -28,6 +28,13 @@ struct ContentView: View {
         }
     }
 
+    private func setDebug(_ show: Bool) {
+        showDebug = show
+        // Keep Debug mode laid out behind the eyes. The preview needs its
+        // surface even when the user only sees the normal eyes screen.
+        session.reopenMic()
+    }
+
     private var debugLayout: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
@@ -38,6 +45,7 @@ struct ContentView: View {
                     .font(.subheadline)
                     .foregroundStyle(Color.muted)
                 CameraSection(sim: session.sim, link: session.link, capture: session.camera)
+                TalkSection(voice: session.voice, say: session.sayTyped)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
@@ -45,7 +53,8 @@ struct ContentView: View {
                 StatusSection(status: session.status)
                 DuckSection(sim: session.sim)
                 LinkSection(link: session.link, toggle: session.toggleLink)
-                Button("Eyes") { showDebug = false }
+                BrainSection(voice: session.voice, use: { session.useBrain(save: true) })
+                Button("Eyes") { setDebug(false) }
                     .buttonStyle(.bordered)
                     .tint(Color.ink)
             }
@@ -60,19 +69,35 @@ struct ContentView: View {
 private struct EyesScreen: View {
     @ObservedObject var sim: SimModel
     @ObservedObject var status: StatusModel
+    @ObservedObject var voice: VoiceModel
     let openDebug: () -> Void
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             EyesFace(lookX: sim.lookX, lookY: sim.lookY)
-            Button("Debug", action: openDebug)
-                .buttonStyle(.bordered)
-                .tint(Color.ink)
-                .padding(12)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: openDebug)
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Debug", action: openDebug)
+                        .buttonStyle(.bordered)
+                        .tint(Color.ink)
+                        .padding(12)
+                        .frame(minWidth: 140, minHeight: 56)
+                }
+                Spacer()
+                Text(voice.line)
+                    .font(.body)
+                    .foregroundStyle(Color.ink)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 28)
+            }
         }
         .background(Color(red: 1, green: 0.957, blue: 0.824))
         .ignoresSafeArea()
-        .accessibilityLabel("Animated robot eyes looking toward the person. \(status.command)")
+        .accessibilityLabel("Animated robot eyes looking toward the person. \(status.command). \(voice.line)")
     }
 }
 
@@ -135,6 +160,42 @@ private struct CameraSection: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct TalkSection: View {
+    @ObservedObject var voice: VoiceModel
+    let say: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(voice.brainStatus)
+                .font(.caption)
+                .foregroundStyle(Color.muted)
+                .lineLimit(1)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(voice.talkLog)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("talk-bottom")
+                }
+                .frame(height: 120)
+                .onChange(of: voice.talkLog) { _, _ in
+                    proxy.scrollTo("talk-bottom", anchor: .bottom)
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("Type what you would say", text: $voice.say)
+                    .submitLabel(.send)
+                    .onSubmit(say)
+                    .fieldStyle()
+                Button("Say", action: say)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.ink)
+            }
+        }
     }
 }
 
@@ -215,6 +276,37 @@ private struct LinkSection: View {
                 .font(.caption)
                 .foregroundStyle(Color.muted)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct BrainSection: View {
+    @ObservedObject var voice: VoiceModel
+    let use: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField("Model URL, e.g. http://192.168.1.10:11434/v1", text: $voice.brainURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .font(.caption)
+                .fieldStyle()
+            TextField("Model", text: $voice.brainModel)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.caption)
+                .frame(maxWidth: 90)
+                .fieldStyle()
+            SecureField("API key", text: $voice.brainKey)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.caption)
+                .frame(maxWidth: 90)
+                .fieldStyle()
+            Button("Use", action: use)
+                .buttonStyle(.bordered)
+                .tint(Color.ink)
         }
     }
 }

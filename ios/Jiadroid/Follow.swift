@@ -252,6 +252,19 @@ enum FollowLogicTests {
         stepPose(&pose, forward: 0.1, lateral: 0, yaw: 0, dt: 1)
         try expect(abs(pose.x) < 0.0001, "pose x \(pose.x)")
         try expect(abs(pose.y - 0.1) < 0.0001, "pose y \(pose.y)")
+
+        try expect(
+            reply(heard: "hello there", seeing: "Person is centered") == "Hello. I can see you, and I can hear you.",
+            "greeting"
+        )
+        try expect(
+            reply(heard: "what do you see", seeing: "Person is lost") == "I don't see anyone right now.",
+            "lost sight"
+        )
+        try expect(
+            reply(heard: "what are you looking at", seeing: "Person is left") == "I see someone. Person is left.",
+            "seen person"
+        )
     }
 
     private static func expect(_ condition: Bool, _ message: String) throws {
