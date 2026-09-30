@@ -1,12 +1,13 @@
-"""On-screen Follow Me demo for an Open Duck Mini.
+"""On-screen Follow Me demo.
 
-The mouse is the person. Decisions become the duck's walk command, the same
-forward / turn values its gamepad sends, and the picture moves from the
-command the duck accepted.
+The mouse is the person. Decisions become a `motion.velocity` command, the
+same one for any body, and the picture moves from the command the robot
+accepted. Pick the body with `--robot duck|rover|duck-physics`.
 """
 
 from __future__ import annotations
 
+import argparse
 import math
 import time
 import tkinter as tk
@@ -21,10 +22,11 @@ from jiadroid.follow import (
     Pose,
     Scene,
     decide,
+    fit_to_robot,
     observe,
     step_pose,
 )
-from jiadroid.sim.controller import SimulatorServer
+from jiadroid.sim.controller import SimulatorServer, make_body
 
 CANVAS_W = 900
 CANVAS_H = 540
@@ -77,10 +79,20 @@ class FollowApp(tk.Tk):
             fg=MUTED,
             bg=BG,
         ).pack(anchor="w", pady=(4, 0))
-        servos = [device for device in robot.devices() if device.type == "servo"]
+        devices = robot.devices()
+        kinds = {}
+        for device in devices:
+            kinds[device.type] = kinds.get(device.type, 0) + 1
+        summary = ", ".join(f"{count} {name}s" for name, count in kinds.items())
+        controls = ", ".join(op for op in robot.controls if op != "walk.velocity")
+        self._has_head = robot.supports("head.pose")
+        self._limits = robot.controls.get("motion.velocity", {})
+        self._max_forward = self._limits.get("forward", (0.0, 0.15))[1] or 0.15
+        self._max_yaw = self._limits.get("yaw", (0.0, 1.0))[1] or 1.0
+        self._probe = next((d.id for d in devices if d.type == "servo"), None)
         tk.Label(
             header,
-            text=f"{robot.name} · {len(servos)} servos",
+            text=f"{robot.name} ({robot.kind}) · {summary} · accepts {controls}",
             font=body_font,
             fg=MUTED,
             bg=BG,
@@ -148,7 +160,7 @@ class FollowApp(tk.Tk):
 
     def _step(self, dt: float) -> None:
         scene = self._scene()
-        decision = decide(scene)
+        decision = fit_to_robot(decide(scene), self._limits)
         self._apply(decision)
         step_pose(self._pose, self._applied[0], self._applied[1], self._applied[2], dt)
         if decision.command == "STOP":
@@ -160,9 +172,9 @@ class FollowApp(tk.Tk):
         if len(self._trail) > 60:
             del self._trail[:-60]
         self._joint_timer += dt
-        if self._joint_timer >= 0.15:
+        if self._joint_timer >= 0.15 and self._probe is not None:
             self._joint_timer = 0.0
-            self._knee = self._robot.servo("left_knee").read()
+            self._knee = self._robot.servo(self._probe).read()
         self._show(decision)
 
     def _scene(self) -> Scene:
@@ -179,12 +191,9 @@ class FollowApp(tk.Tk):
             return
         command = (decision.forward, decision.lateral, decision.yaw, decision.head_yaw)
         if command != self._applied:
-            self._robot.walk(
-                forward=decision.forward,
-                lateral=decision.lateral,
-                yaw=decision.yaw,
-                head_yaw=decision.head_yaw,
-            )
+            self._robot.move(forward=decision.forward, lateral=decision.lateral, yaw=decision.yaw)
+            if self._has_head:
+                self._robot.look(yaw=decision.head_yaw)
             self._applied = command
         self._holding_stop = False
 
@@ -200,12 +209,12 @@ class FollowApp(tk.Tk):
         self.detail.configure(
             text=(
                 f"forward {self._applied[0]:.2f} m/s   turn {self._applied[2]:.2f} rad/s   "
-                f"head {self._applied[3]:.2f}   knee {self._knee:.2f}   "
+                f"head {self._applied[3]:.2f}   {self._probe or 'servo'} {self._knee:.2f}   "
                 f"{self._robot.safety}"
             )
         )
-        self._draw_bar(self.forward_bar, self._applied[0] / 0.15)
-        self._draw_bar(self.turn_bar, self._applied[2] / 1.0)
+        self._draw_bar(self.forward_bar, self._applied[0] / self._max_forward)
+        self._draw_bar(self.turn_bar, self._applied[2] / self._max_yaw)
 
     def _draw_bar(self, canvas: tk.Canvas, speed: float) -> None:
         canvas.delete("all")
@@ -302,8 +311,13 @@ class FollowApp(tk.Tk):
         return x, CANVAS_H - y
 
 
-def main() -> None:
-    server = SimulatorServer("127.0.0.1", 0)
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Follow Me on a laptop")
+    parser.add_argument("--robot", default="duck", choices=("duck", "rover", "duck-physics"))
+    parser.add_argument("--policy", help="walking policy for duck-physics (.onnx or .zip)")
+    args = parser.parse_args(argv)
+    options = {"policy": args.policy} if args.robot == "duck-physics" else {}
+    server = SimulatorServer("127.0.0.1", 0, make_body(args.robot, **options))
     server.start()
     robot = connect(f"tcp://{server.host}:{server.port}")
     try:

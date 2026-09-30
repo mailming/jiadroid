@@ -41,9 +41,9 @@ USB made it possible to plug almost any keyboard, camera, or printer into almost
 
 Jiadroid tries to do the same for robots.
 
-When a phone connects, the robot introduces itself: "I have these leg servos," or "I have two drive wheels and a bump sensor." The phone does not need a custom driver for each machine. It reads that list and knows what it can control.
+When a phone connects, the robot introduces itself twice over. First, what kind of body it is and which commands it takes: "I can move at up to 0.15 m/s and turn at 1 rad/s, and I have a head that pitches and yaws," or "I can move at 0.5 m/s and turn at 2 rad/s, and that is all." Second, the parts: "I have these 14 leg and head servos," or "I have two drive wheels, two encoders, and a bump switch." The phone does not need a custom driver for each machine. It reads those lists, scales its decisions to the limits, and knows what it can control.
 
-The robot stays simple. It needs a small controller that moves its hardware, reports back what happened, and stops safely when asked.
+The robot stays simple. It needs a small controller that moves its hardware, reports back what happened, and stops safely when asked. That controller is an ESP32. It already has Wi-Fi, Bluetooth, and USB serial, so the phone can use whichever of those the robot has. The ESP32 does not see, hear, or decide. The phone does that.
 
 ## Connect by Wi-Fi, Bluetooth, or USB
 
@@ -51,11 +51,11 @@ Robots are built differently, so the phone should connect however the robot can.
 
 | Connection | Good for |
 | --- | --- |
-| Wi-Fi | Robots that already have a small computer on board, like Open Duck Mini, or phones that sit nearby instead of riding on the robot |
-| Bluetooth | Simple, low-power robots and toys that need a wireless link without a network |
-| USB cable | A phone mounted directly on the robot, with the most reliable connection and the option to charge the phone |
+| Wi-Fi | An ESP32 on the robot, a robot that already has a small computer such as Open Duck Mini, or a phone that sits nearby instead of riding on the robot |
+| Bluetooth | An ESP32 talking to a phone with no network, including simple low-power robots and toys |
+| USB cable | A phone mounted on the robot and plugged into the ESP32, with the most reliable connection and the option to charge the phone |
 
-A robot vacuum could talk over Bluetooth. A robot dog could use Wi-Fi. A homemade rover could plug the phone straight into its controller with USB. The same Follow Me app would work on all three.
+A robot vacuum could talk over Bluetooth. A robot dog could use Wi-Fi. A homemade rover could plug the phone straight into its ESP32 with USB. The same Follow Me app would work on all three.
 
 ## Why this could matter
 
@@ -89,11 +89,15 @@ Nothing about that decision belongs to one robot. A robot vacuum turns with its 
 
 ## First body: Open Duck Mini
 
-The first demo body is [Open Duck Mini](https://github.com/apirrone/Open_Duck_Mini), an open-source walking duck with 14 servos. It is a good test because walking is harder than rolling, and because the duck already understands one simple instruction: walk forward, step sideways, or turn. Today that instruction comes from a game controller. In this project, it comes from the phone.
+The first demo body is [Open Duck Mini](https://github.com/apirrone/Open_Duck_Mini), an open-source walking duck with 14 servos. It is a good test because walking is harder than rolling, and because the duck already understands one simple instruction: walk forward, step sideways, or turn. Today that instruction comes from a game controller. In this project, it comes from the phone, through an ESP32 on the robot.
 
 The duck's own walking software still handles balance and each leg joint. The phone only decides where it should go and where it should look.
 
 That split is the point: the phone is the brain, and the robot keeps the reflexes it needs to move safely.
+
+## Second body: a rover
+
+To prove that the phone side is general, the simulator also ships a two-wheel rover: the shape of a robot vacuum or a classroom robot. It has drive motors, wheel encoders, a bump switch, and a range sensor, and no head. It announces only "move", and the same Follow Me app drives it, scaled up to its speed.
 
 ## Try it on a laptop
 
@@ -101,18 +105,44 @@ You can see the idea working now, without a phone or a robot.
 
 ```bash
 python -m pip install -e .
-python -m jiadroid.demo
+python -m jiadroid.demo                  # the duck
+python -m jiadroid.demo --robot rover    # the rover, same brain
 ```
 
-In the window, your mouse is you. The duck is the robot. The pale cone is what the phone camera sees. The large word is the phone's decision, and the numbers are the walk command the duck accepted.
+In the window, your mouse is you. The robot is drawn as a duck either way. The pale cone is what the phone camera sees. The large word is the phone's decision, and the numbers are the motion command the robot accepted, in its own units.
 
 Try this:
 
-1. Stay in the cone, ahead of the duck. It walks toward you.
-2. Move to either side. It turns toward you, and its head looks your way.
+1. Stay in the cone, ahead of the robot. It moves toward you.
+2. Move to either side. It turns toward you, and a duck's head looks your way.
 3. Come too close, or leave the cone. It stops.
 
 Escape closes the window.
+
+## Try it with physics, and teach the duck to walk
+
+The kinematic duck above waves its legs on a timer. The physics duck is the real thing: the Open Duck Mini's own model (14 servos, its mass and inertia, its feet) in [MuJoCo](https://mujoco.org), standing on a floor, falling if it is pushed too hard. A walking policy decides the joint targets from what the duck senses, fifty times a second, exactly the way the duck's on-board runtime does.
+
+```bash
+python -m pip install -e ".[rl]"
+python -m jiadroid.sim --robot duck-physics          # stands, moves its head, waits for a walker
+python -m jiadroid.demo --robot duck-physics         # the Follow Me window on top of it
+python -m jiadroid.rl                                # random actions in the training environment
+```
+
+Nobody has to hand-write the walk. The duck learns it by reinforcement learning in the Gymnasium environment `Jiadroid/OpenDuckMini-v0`: it is told a velocity, rewarded for matching it and staying up, and penalised for wasting torque or twitching. Sensor noise, delays, shoves, and floor friction are randomised so what it learns survives the move to hardware.
+
+```bash
+python -m pip install -e ".[train]"
+python examples/train_duck.py --steps 20000000 --envs 8 --out runs/duck_ppo --export-onnx
+python examples/train_duck.py --eval runs/duck_ppo.zip
+mjpython -m jiadroid.rl --policy runs/duck_ppo.zip --view --clean            # watch it (macOS needs mjpython)
+python -m jiadroid.sim --robot duck-physics --policy runs/duck_ppo.onnx --host 0.0.0.0
+```
+
+That last line puts the learned walker behind the protocol. Point the phone app at it and the phone's decision moves a physically simulated duck.
+
+The environment keeps the same observation, action, and command layout as [Open Duck Playground](https://github.com/apirrone/Open_Duck_Playground) and [Open Duck Mini Runtime](https://github.com/apirrone/Open_Duck_Mini_Runtime). A policy trained here runs on the real duck's runtime as an `.onnx` file, and a Playground `.onnx` runs here with `--policy`. See [docs/training.md](docs/training.md) for the details and what to expect from training.
 
 ## Try it on a phone
 
@@ -121,30 +151,34 @@ The Android and iOS apps follow a real person, a printed photo of a person, or a
 1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match.
 2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
 3. Point the camera at the target. Center it and the duck walks forward. Move it to either side and the duck turns. Come too close, or leave the view, and the duck stops.
-4. To drive the laptop simulator as well, start it where the phone can reach it, then enter that address in the app and tap Connect.
+4. To drive a laptop simulator as well, start one where the phone can reach it, then enter that address in the app and tap Connect.
 
 ```bash
 python -m pip install -e .
-python -m jiadroid.sim --host 0.0.0.0
+python -m jiadroid.sim --host 0.0.0.0                          # kinematic duck
+python -m jiadroid.sim --host 0.0.0.0 --robot rover            # rover
+python -m jiadroid.sim --host 0.0.0.0 --robot duck-physics --policy runs/duck_ppo.onnx
 ```
 
-The phone and the laptop need to be on the same Wi-Fi. The simulator prints the address to enter.
+The phone and the laptop need to be on the same Wi-Fi. The simulator prints the address to enter. The app shows which body it connected to and drives whichever one answers.
 
 ## What exists today
 
-- A shared language between phone and robot. The robot announces its hardware. The phone sends commands. The robot reports what it is doing.
-- Safety built into the language. A stop command halts motion, and an emergency stop blocks all movement until someone clears it.
-- A simulated Open Duck Mini that announces its 14 servos and accepts walk commands.
-- Follow Me logic that decides where the robot should go.
+- A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, and its parts. The phone sends commands scaled to those limits. The robot reports what it is doing.
+- Safety built into the language. A stop command halts motion, an emergency stop blocks all movement until someone clears it, and a reset puts a simulated robot back on its feet.
+- Three simulated bodies behind that one language: a kinematic Open Duck Mini, a two-wheel rover, and an Open Duck Mini in MuJoCo physics.
+- A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
+- Follow Me logic that decides where the robot should go, and rescales that decision to any body.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, listen and answer out loud, keep the conversation on a Debug screen with the camera and simulated duck, and can send the walk command to the laptop simulator.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, listen and answer out loud, keep the conversation on a Debug screen with the camera and simulated duck, and send the motion command to any of the laptop simulators.
 
 ## What is not built yet
 
+- A trained walker that walks well. The training environment and script are here, and a few million steps produce a duck that stands and shuffles. Walking as well as the Open Duck project's policies needs longer training and its imitation reward, which relies on reference motions this repository does not ship. See [docs/training.md](docs/training.md).
 - Telling people apart. With several people in view, the phone follows whichever one the pose detector picks.
-- A dock that mounts the phone on the duck, and a connection to a real Open Duck Mini. The next step is to feed the phone's walk command into the duck's existing walking software, in place of its game controller.
-- Bluetooth and USB connections. The phone reaches the simulator over the network.
-- A second robot body, such as a robot vacuum or a robot dog, to prove that one phone can drive very different machines.
+- ESP32 firmware that speaks this language and drives a real body. A dock that mounts the phone on the duck, and a connection from that ESP32 to a real Open Duck Mini, so the phone's `motion.velocity` is written into `RLWalk.last_commands` in place of the game controller.
+- Bluetooth and USB connections. The phone reaches the simulators over the network.
+- A physical second body. The rover exists only as a simulator.
 
 ## Where this goes
 
@@ -154,4 +188,4 @@ The larger goal is: "My phone can give intelligence to any compatible machine."
 
 After Follow Me, the same phone could add voice commands, obstacle avoidance, and navigation. The same connection could then reach grippers, arms, garden tools, or other devices, so hardware makers and app makers can build for one shared platform.
 
-The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md).
+The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md).

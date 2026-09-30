@@ -240,7 +240,7 @@ final class FollowSession: ObservableObject, CameraSink {
                     self.setRobot(robot)
                     self.lastCommandKey = nil
                     self.link.connected = true
-                    self.link.linkText = "Sending commands to \(robot.name) · \(robot.servoCount) servos at \(host):\(port)"
+                    self.link.linkText = "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices at \(host):\(port)"
                 }
             } catch {
                 DispatchQueue.main.async {

@@ -88,6 +88,31 @@ def decide(scene: Scene) -> FollowDecision:
     return FollowDecision("Person is centered", "FORWARD", 0.08, 0.0, 0.0, head_yaw)
 
 
+def fit_to_robot(decision: FollowDecision, limits: dict[str, tuple[float, float]]) -> FollowDecision:
+    """Rescale a decision, made in Open Duck Mini units, to another body's `motion.velocity` limits.
+
+    A rover that can do 0.5 m/s gets the same "walk forward" as a duck that
+    can do 0.15 m/s, scaled up. A field the body did not announce becomes 0.
+    """
+    duck = {"forward": 0.15, "lateral": 0.2, "yaw": 1.0}
+
+    def scale(name: str, value: float) -> float:
+        if name not in limits:
+            return 0.0
+        low, high = limits[name]
+        bound = high if value >= 0 else -low
+        return value / duck[name] * bound
+
+    return FollowDecision(
+        decision.situation,
+        decision.command,
+        scale("forward", decision.forward),
+        scale("lateral", decision.lateral),
+        scale("yaw", decision.yaw),
+        decision.head_yaw,
+    )
+
+
 def step_pose(
     pose: Pose,
     forward: float,

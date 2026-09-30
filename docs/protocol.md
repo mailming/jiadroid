@@ -1,14 +1,16 @@
-# Jiadroid protocol 0.1
+# Jiadroid protocol 0.2
 
 Technical contract for the phone-to-robot link. The idea and the laptop demo are in the [README](../README.md).
 
-Version 0.1 covers discovery, servo position, the Open Duck Mini walk command, telemetry, and safety. The same messages are what the Android and iOS follow apps send to the simulator, and what they should send to the duck's runtime.
+Version 0.2 makes the link general. A robot introduces itself with a `kind` and a list of `controls`: the robot-level commands it accepts, each with limits. The phone reads that list and drives the body with `motion.velocity` and, if there is one, `head.pose`, scaling its decisions to the announced limits. It does not need to know whether it is talking to legs or wheels. Devices (servos, motors, encoders, sensors) are still listed individually for finer control.
+
+The Open Duck Mini's 0.1 command, `walk.velocity`, remains as an alias so older phone builds and the duck's runtime keep working. 0.2 clients accept 0.1 robots and assume the duck's controls for them.
 
 ## Transport
 
 The protocol is a stream of messages and does not depend on how it is carried. Intended links are Wi-Fi (TCP), Bluetooth (a serial-style stream such as Bluetooth Classic SPP or a BLE UART service), and USB (USB serial). Each carries the same framed messages below.
 
-Version 0.1 implements TCP only. The reference simulator listens on `127.0.0.1:8765`. Use `--host 0.0.0.0` when a phone on the same network should connect.
+Version 0.2 implements TCP only. The reference simulator listens on `127.0.0.1:8765`. Use `--host 0.0.0.0` when a phone on the same network should connect.
 
 ## Framing
 
@@ -17,7 +19,7 @@ Each message is one UTF-8 JSON object followed by a single `\n`. Carriage return
 ## Envelope
 
 ```json
-{"v":1,"id":"1","kind":"req","op":"walk.velocity","body":{"forward":0.1,"yaw":0.4}}
+{"v":1,"id":"1","kind":"req","op":"motion.velocity","body":{"forward":0.1,"yaw":0.4}}
 ```
 
 | Field | Meaning |
@@ -33,38 +35,78 @@ Unknown envelope fields are rejected. Unknown fields inside `body` are ignored.
 
 The response copies `id` and `op` from the request.
 
-## Devices
+## Robot
 
-A device is `{type, id, capabilities}`. `type` and `id` together identify it.
+`session.hello` describes the robot:
 
-The reference robot is an [Open Duck Mini](https://github.com/apirrone/Open_Duck_Mini). It announces 14 devices of type `servo`, each with capability `position`. Names and standing pose match `HWI` in [Open Duck Mini Runtime](https://github.com/apirrone/Open_Duck_Mini_Runtime): `left_hip_yaw`, `left_hip_roll`, `left_hip_pitch`, `left_knee`, `left_ankle`, `neck_pitch`, `head_pitch`, `head_yaw`, `head_roll`, `right_hip_yaw`, `right_hip_roll`, `right_hip_pitch`, `right_knee`, `right_ankle`.
+```json
+{
+  "protocol": "jiadroid",
+  "version": "0.2",
+  "robot": {"id": "open-duck-mini", "name": "Open Duck Mini", "kind": "biped"},
+  "safety": {"state": "ready"},
+  "controls": {
+    "motion.velocity": {"forward": [-0.15, 0.15], "lateral": [-0.2, 0.2], "yaw": [-1, 1]},
+    "head.pose": {"neck_pitch": [-0.34, 1.1], "pitch": [-0.78, 0.3], "yaw": [-0.5, 0.5], "roll": [-0.5, 0.5]},
+    "walk.velocity": {}
+  },
+  "devices": [{"type": "servo", "id": "left_knee", "capabilities": ["position"]}]
+}
+```
+
+`kind` is one of `biped`, `quadruped`, `wheeled`, `arm`, `other`. It is descriptive; the phone acts on `controls`.
+
+### Controls
+
+`controls` maps an operation name to the fields it accepts and their inclusive limits, `{field: [low, high]}`. This is the robot's plug description, in the way a USB device describes itself. Rules:
+
+- A field that is listed may be sent within its limits.
+- A field that is omitted from a request is `0`.
+- A field the robot did not list is refused with `out_of_range` unless it is `0`. A rover has no `lateral`; sending `lateral: 0` is fine, `lateral: 0.1` is not.
+- An operation the robot did not list fails with `unsupported`.
+
+Robot-level operations that can appear in `controls`:
+
+| Operation | Fields | Meaning |
+| --- | --- | --- |
+| `motion.velocity` | `forward`, `lateral` (m/s), `yaw` (rad/s) | Body velocity. Positive `yaw` turns left (counterclockwise). |
+| `head.pose` | `pitch`, `yaw`, `roll`, `neck_pitch` (radians) | Where the head points. Bodies without a head do not list it. |
+| `walk.velocity` | none listed | 0.1 alias for the Open Duck Mini, see below. |
+
+The phone's Follow Me decision is made in the duck's units and scaled to the connected body's limits: "walk forward" is 0.12 m/s on a duck that can do 0.15 and 0.4 m/s on a rover that can do 0.5. The client libraries do this (`fit_to_robot` in Python, `fit` in Kotlin and Swift).
+
+### Devices
+
+A device is `{type, id, capabilities}`. `type` and `id` together identify it. Types in this version:
+
+| Type | Capabilities | Operations |
+| --- | --- | --- |
+| `servo` | `position` | `servo.position`, `servo.read` |
+| `motor` | `velocity` | `motor.velocity` |
+| `encoder` | `ticks` | `encoder.read` |
+| `sensor` | its unit: `boolean`, `meters`, ... | `sensor.read` |
+
+The Open Duck Mini announces 14 `servo` devices. Names and standing pose match `HWI` in [Open Duck Mini Runtime](https://github.com/apirrone/Open_Duck_Mini_Runtime): `left_hip_yaw`, `left_hip_roll`, `left_hip_pitch`, `left_knee`, `left_ankle`, `neck_pitch`, `head_pitch`, `head_yaw`, `head_roll`, `right_hip_yaw`, `right_hip_roll`, `right_hip_pitch`, `right_knee`, `right_ankle`. The physics duck adds sensors `left_foot`, `right_foot`, `height`, `upright`.
+
+The rover announces motors `left_wheel`, `right_wheel`, encoders with the same names, and sensors `bump` and `range_front`.
 
 ## Safety
 
 States: `ready`, `running`, `estop`.
 
-- A non-zero forward, lateral, or yaw command moves `ready` to `running`.
-- A head-only command stays in `ready`.
-- `robot.stop` zeros the walk command and returns every servo to the standing pose. It does not clear an emergency stop.
-- `safety.estop` does the same and latches `estop`.
-- While latched, `walk.velocity` and `servo.position` fail with `safety_blocked`.
+- A non-zero `motion.velocity` or `motor.velocity` moves `ready` to `running`.
+- `head.pose` and `servo.position` do not change the state.
+- `robot.stop` zeros motion and head and returns servos to the neutral pose. It does not clear an emergency stop.
+- `robot.reset` does the same and, in a simulator, puts the robot back on its feet at the origin.
+- `safety.estop` stops and latches `estop`.
+- While latched, `motion.velocity`, `head.pose`, `motor.velocity`, `servo.position`, and `walk.velocity` fail with `safety_blocked`.
 - `safety.clear` moves `estop` to `ready`.
 
 ## Operations
 
 ### `session.hello`
 
-Event sent by the controller immediately after connect.
-
-```json
-{
-  "protocol": "jiadroid",
-  "version": "0.1",
-  "robot": {"id": "open-duck-mini", "name": "Open Duck Mini"},
-  "safety": {"state": "ready"},
-  "devices": []
-}
-```
+Event sent by the robot immediately after connect. Body above.
 
 ### `session.ping`
 
@@ -72,39 +114,47 @@ Request body `{}`. Response body `{"ok": true}`.
 
 ### `session.bye`
 
-Request body `{}`. Response body `{"ok": true}`. The controller then closes the connection.
+Request body `{}`. Response body `{"ok": true}`. The robot then closes the connection.
 
 ### `devices.list`
 
 Request body `{}`. Response body `{"devices": [ ... ]}`.
 
-### `walk.velocity`
+### `motion.velocity`
 
-This is the phone's replacement for the duck's Xbox controller. The fields are the runtime's `last_commands`, in the same units and limits (`xbox_controller.py`):
-
-| Field | Meaning | Limit |
-| --- | --- | --- |
-| `forward` | `lin_vel_x`, m/s | -0.15 to 0.15 |
-| `lateral` | `lin_vel_y`, m/s | -0.2 to 0.2 |
-| `yaw` | angular velocity, rad/s | -1 to 1 |
-| `neck_pitch` | radians | -0.34 to 1.1 |
-| `head_pitch` | radians | -0.78 to 0.3 |
-| `head_yaw` | radians | -0.5 to 0.5 |
-| `head_roll` | radians | -0.5 to 0.5 |
-
-Omitted fields are `0`. Positive `yaw` turns the duck counterclockwise.
+Request body: the announced fields, e.g. `{"forward": 0.1, "yaw": 0.4}`. Response echoes every announced field and adds `safety`:
 
 ```json
-{"forward": 0.1, "lateral": 0, "yaw": 0.4, "head_yaw": 0.2}
+{"forward": 0.1, "lateral": 0, "yaw": 0.4, "safety": {"state": "running"}}
 ```
 
-The response echoes the command and includes `safety`.
+On the Open Duck Mini these are `lin_vel_x`, `lin_vel_y`, and the angular velocity that the walk policy reads. On the rover they become two wheel speeds.
 
-On a real duck, these seven numbers are written into `RLWalk.last_commands`. The ONNX walk policy in Open Duck Mini Runtime still produces the joint targets. This repository does not run that policy.
+### `head.pose`
+
+Request body: the announced fields in radians, e.g. `{"yaw": 0.2}`. Response echoes them and adds `safety`. On the duck, `pitch`, `yaw`, `roll` are the `head_*` servos and `neck_pitch` is its own servo.
+
+### `walk.velocity`
+
+The Open Duck Mini's 0.1 command, one message for motion and head, with the runtime's field names (`xbox_controller.py`):
+
+| Field | Limit |
+| --- | --- |
+| `forward` | -0.15 to 0.15 m/s |
+| `lateral` | -0.2 to 0.2 m/s |
+| `yaw` | -1 to 1 rad/s |
+| `neck_pitch` | -0.34 to 1.1 rad |
+| `head_pitch` | -0.78 to 0.3 rad |
+| `head_yaw` | -0.5 to 0.5 rad |
+| `head_roll` | -0.5 to 0.5 rad |
+
+It is exactly `motion.velocity` followed by `head.pose`. The response echoes all seven fields and `safety`. New clients should send the two 0.2 operations.
+
+On a real duck, these seven numbers are `RLWalk.last_commands`. The walk policy produces the joint targets. The physics simulator in this repository runs such a policy too.
 
 ### `servo.position`
 
-Request body `{"id": "head_yaw", "position": 0.2}`. `position` is radians, from `-2.5` to `2.5`. For a head joint, this also updates that field of the walk command. Response:
+Request body `{"id": "head_yaw", "position": 0.2}`. `position` is radians, from `-2.5` to `2.5`. For a head joint, this also updates the matching field of `head.pose`. Response:
 
 ```json
 {"id": "head_yaw", "position": 0.2, "safety": {"state": "ready"}}
@@ -114,25 +164,44 @@ Request body `{"id": "head_yaw", "position": 0.2}`. `position` is radians, from 
 
 Request body `{"id": "left_knee"}`. Response body `{"id": "left_knee", "position": 1.368}`.
 
+### `motor.velocity`
+
+Request body `{"id": "left_wheel", "velocity": 5.0}`, in rad/s within the motor's own limit. Response `{"id", "velocity", "safety"}`. On the rover, driving motors directly updates the reported `motion`.
+
+### `encoder.read`
+
+Request body `{"id": "left_wheel"}`. Response body `{"id": "left_wheel", "ticks": 360}`.
+
+### `sensor.read`
+
+Request body `{"id": "range_front"}`. Response body `{"id": "range_front", "value": 1.25, "unit": "meters"}`. Booleans are `0` or `1`.
+
 ### `robot.stop`
 
-Request body `{}`. Response body `{"safety": {"state": "ready"}}`, or `estop` if the latch is set. Servos return to the standing pose from the runtime's `init_pos`.
+Request body `{}`. Response body `{"safety": {"state": "ready"}}`, or `estop` if the latch is set.
+
+### `robot.reset`
+
+Request body `{}`. Response body `{"safety": {"state": ...}}`. Neutral pose; a simulator also restores its starting position.
 
 ### `telemetry.subscribe`
 
 Request body `{"hz": 10}`. `hz` may be omitted and then defaults to 10. It must be greater than 0 and at most 50. Response body `{"hz": 10}`.
 
-The controller then emits `telemetry.sample` events:
+The robot then emits `telemetry.sample` events:
 
 ```json
 {
   "safety": {"state": "running"},
-  "commands": {"forward": 0.1, "lateral": 0, "yaw": 0.4, "neck_pitch": 0, "head_pitch": 0, "head_yaw": 0.2, "head_roll": 0},
-  "servos": {"left_knee": 1.4, "head_yaw": 0.2}
+  "motion": {"forward": 0.1, "lateral": 0, "yaw": 0.4},
+  "head": {"pitch": 0, "yaw": 0.2, "roll": 0, "neck_pitch": 0},
+  "servos": {"left_knee": 1.4, "head_yaw": 0.2},
+  "sensors": {"left_foot": 1, "right_foot": 0, "upright": 1},
+  "base": {"x": 0.31, "y": -0.02, "z": 0.16, "yaw": 0.4}
 }
 ```
 
-While a walk command is active, the simulator swings the leg joints around the standing pose so a step is visible. That swing is a stand-in for the real policy.
+`safety`, `motion`, and `servos` are always present. `head`, `motors`, `sensors`, and `base` appear when the body has them. `base` is the robot's estimate of its own pose in meters and radians; simulators report the true one.
 
 ### `safety.estop`
 
@@ -149,13 +218,21 @@ Failed responses use `error.code`:
 | Code | When |
 | --- | --- |
 | `unknown_device` | No device has that id. |
-| `unsupported` | The device cannot do that, or the operation is unknown. |
-| `out_of_range` | A walk command or servo position is outside its limits. |
-| `safety_blocked` | A walk or servo command arrived while emergency stop is latched. |
+| `unsupported` | The device cannot do that, the robot does not accept that operation, or the operation is unknown. |
+| `out_of_range` | A value is outside its limits, or a field the robot did not announce is non-zero. |
+| `safety_blocked` | A motion or position command arrived while emergency stop is latched. |
 
-## Reference simulator
+## Reference simulators
 
-`python -m jiadroid.sim` listens on `tcp://127.0.0.1:8765` and announces the 14 Open Duck Mini servos. Add `--host 0.0.0.0` so a phone on the same Wi-Fi can connect. The laptop Follow Me window, and the Android and iOS apps, decide a walk command and send it with this protocol.
+`python -m jiadroid.sim` hosts one body on `tcp://127.0.0.1:8765`. Add `--host 0.0.0.0` so a phone on the same Wi-Fi can connect.
+
+| `--robot` | Body | Needs |
+| --- | --- | --- |
+| `duck` (default) | Open Duck Mini, kinematic. Legs swing on a sine wave so a step is visible. | nothing |
+| `rover` | Two-wheel differential drive with encoders, a bump switch, a range sensor, and a wall to bump into. | nothing |
+| `duck-physics` | Open Duck Mini in MuJoCo. A walking policy turns `motion.velocity` into joint targets; without one the duck stands and moves its head. `--policy file.onnx|file.zip`, `--view`. | `pip install -e ".[sim]"` |
+
+Any of them accepts the same Follow Me command from the Android and iOS apps and from `python -m jiadroid.demo`.
 
 ## Client shape
 
@@ -163,11 +240,15 @@ Failed responses use `error.code`:
 from jiadroid import connect
 
 robot = connect("tcp://127.0.0.1:8765")
-robot.devices()
-robot.walk(forward=0.1, yaw=0.4, head_yaw=0.2)
+robot.kind                       # "biped"
+robot.controls                   # {"motion.velocity": {"forward": (-0.15, 0.15), ...}, ...}
+robot.move(forward=0.1, yaw=0.4)
+if robot.supports("head.pose"):
+    robot.look(yaw=0.2)
 robot.servo("left_knee").read()
+robot.sensor("upright").read()
 robot.stop()
 robot.close()
 ```
 
-`servo(id)` fails in the client when that servo was not announced. `walk` waits for the controller's response.
+`move` and `look` fail in the client with `unsupported` when the robot did not announce the operation, and `servo(id)` fails when that servo was not announced. `walk(...)` still exists for the duck and falls back to `move` plus `look` on other bodies.

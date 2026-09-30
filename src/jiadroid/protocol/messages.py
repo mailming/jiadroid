@@ -1,18 +1,31 @@
-"""Message types for protocol 0.1."""
+"""Message types for protocol 0.2."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 PROTOCOL_NAME = "jiadroid"
-PROTOCOL_VERSION = "0.1"
+PROTOCOL_VERSION = "0.2"
+# Hello versions a client will still talk to. 0.1 robots lack `controls`
+# and `kind`; the client then assumes the Open Duck Mini walk command.
+COMPATIBLE_VERSIONS = frozenset({"0.1", "0.2"})
 ENVELOPE_VERSION = 1
 MAX_LINE_BYTES = 8192
 DEFAULT_PORT = 8765
 DEFAULT_TELEMETRY_HZ = 10.0
 MAX_TELEMETRY_HZ = 50.0
 SAFETY_STATES = frozenset({"ready", "running", "estop"})
+ROBOT_KINDS = frozenset({"biped", "quadruped", "wheeled", "arm", "other"})
+
+# Robot-level operations a body may announce in `hello.controls`, with the
+# body fields each one carries. A body announces the fields it accepts and
+# their inclusive limits; a field it does not list is refused unless zero.
+MOTION_FIELDS = ("forward", "lateral", "yaw")
+HEAD_FIELDS = ("pitch", "yaw", "roll", "neck_pitch")
+
+# Limits are a `{field: [low, high]}` map per announced operation.
+Controls = dict[str, dict[str, tuple[float, float]]]
 
 _KINDS = frozenset({"req", "res", "evt"})
 _ENVELOPE_FIELDS = frozenset({"v", "kind", "op", "id", "body", "error"})
@@ -71,13 +84,30 @@ class Hello:
     robot_name: str
     safety: str
     devices: tuple[Device, ...]
+    kind: str = "other"
+    controls: Controls = field(default_factory=dict)
+
+    def supports(self, op: str) -> bool:
+        return op in self.controls
 
 
 @dataclass(frozen=True)
 class TelemetrySample:
     safety: str
-    commands: dict[str, float]
+    motion: dict[str, float]
     servos: dict[str, float]
+    head: dict[str, float] = field(default_factory=dict)
+    motors: dict[str, float] = field(default_factory=dict)
+    sensors: dict[str, float] = field(default_factory=dict)
+    base: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def commands(self) -> dict[str, float]:
+        """0.1 view: motion and head in one map, head keys as `head_*`."""
+        merged = dict(self.motion)
+        for name, value in self.head.items():
+            merged[name if name == "neck_pitch" else f"head_{name}"] = value
+        return merged
 
 
 def request(op: str, body: dict[str, Any], msg_id: str) -> Message:
@@ -141,12 +171,59 @@ def parse_safety_state(body: dict[str, Any]) -> str:
     return state
 
 
+def parse_controls(data: object) -> Controls:
+    """`{op: {field: [low, high]}}`. Missing means the robot announced none."""
+    from jiadroid.errors import ProtocolError
+
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ProtocolError("controls must be an object")
+    controls: Controls = {}
+    for op, limits in data.items():
+        if not isinstance(op, str) or not op:
+            raise ProtocolError("control name must be a string")
+        if not isinstance(limits, dict):
+            raise ProtocolError(f"limits for {op} must be an object")
+        fields: dict[str, tuple[float, float]] = {}
+        for name, span in limits.items():
+            if (
+                not isinstance(name, str)
+                or not isinstance(span, list)
+                or len(span) != 2
+                or any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in span)
+                or float(span[0]) > float(span[1])
+            ):
+                raise ProtocolError(f"invalid limit for {op}.{name}")
+            fields[name] = (float(span[0]), float(span[1]))
+        controls[op] = fields
+    return controls
+
+
+def controls_to_dict(controls: Controls) -> dict[str, dict[str, list[float]]]:
+    return {op: {name: [low, high] for name, (low, high) in limits.items()} for op, limits in controls.items()}
+
+
+# What a 0.1 Open Duck Mini accepted, so 0.2 clients can still drive one.
+LEGACY_DUCK_CONTROLS: Controls = {
+    "walk.velocity": {},
+    "motion.velocity": {"forward": (-0.15, 0.15), "lateral": (-0.2, 0.2), "yaw": (-1.0, 1.0)},
+    "head.pose": {
+        "neck_pitch": (-0.34, 1.1),
+        "pitch": (-0.78, 0.3),
+        "yaw": (-0.5, 0.5),
+        "roll": (-0.5, 0.5),
+    },
+}
+
+
 def parse_hello(body: dict[str, Any]) -> Hello:
     from jiadroid.errors import ProtocolError
 
     if body.get("protocol") != PROTOCOL_NAME:
         raise ProtocolError("unexpected protocol")
-    if body.get("version") != PROTOCOL_VERSION:
+    version = body.get("version")
+    if version not in COMPATIBLE_VERSIONS:
         raise ProtocolError("unexpected protocol version")
     robot = body.get("robot")
     if not isinstance(robot, dict):
@@ -157,29 +234,53 @@ def parse_hello(body: dict[str, Any]) -> Hello:
         raise ProtocolError("invalid robot identity")
     if not isinstance(robot_name, str) or not robot_name:
         raise ProtocolError("invalid robot identity")
+    kind = robot.get("kind", "other")
+    if kind not in ROBOT_KINDS:
+        raise ProtocolError("unknown robot kind")
+    if version == "0.1":
+        controls = dict(LEGACY_DUCK_CONTROLS)
+        kind = "biped"
+    else:
+        controls = parse_controls(body.get("controls"))
     return Hello(
         protocol=PROTOCOL_NAME,
-        version=PROTOCOL_VERSION,
+        version=version,
         robot_id=robot_id,
         robot_name=robot_name,
         safety=parse_safety_state(body),
         devices=parse_devices(body.get("devices")),
+        kind=kind,
+        controls=controls,
     )
 
 
 def parse_telemetry(body: dict[str, Any]) -> TelemetrySample:
-    from jiadroid.errors import ProtocolError
-
+    """Accepts a 0.2 sample. A 0.1 `commands` map is split into motion and head."""
+    if "commands" in body and "motion" not in body:
+        commands = _parse_number_map(body.get("commands"), "commands")
+        motion = {name: commands.pop(name, 0.0) for name in MOTION_FIELDS}
+        head = {
+            (name[5:] if name.startswith("head_") else name): value for name, value in commands.items()
+        }
+    else:
+        motion = _parse_number_map(body.get("motion"), "motion")
+        head = _parse_number_map(body.get("head"), "head", optional=True)
     return TelemetrySample(
         safety=parse_safety_state(body),
-        commands=_parse_number_map(body.get("commands"), "commands"),
+        motion=motion,
         servos=_parse_number_map(body.get("servos"), "servos"),
+        head=head,
+        motors=_parse_number_map(body.get("motors"), "motors", optional=True),
+        sensors=_parse_number_map(body.get("sensors"), "sensors", optional=True),
+        base=_parse_number_map(body.get("base"), "base", optional=True),
     )
 
 
-def _parse_number_map(data: object, label: str) -> dict[str, float]:
+def _parse_number_map(data: object, label: str, optional: bool = False) -> dict[str, float]:
     from jiadroid.errors import ProtocolError
 
+    if data is None and optional:
+        return {}
     if not isinstance(data, dict):
         raise ProtocolError(f"telemetry is missing {label}")
     values: dict[str, float] = {}

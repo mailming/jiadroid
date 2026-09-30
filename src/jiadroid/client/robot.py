@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from jiadroid.errors import ProtocolError, RobotError
 from jiadroid.protocol.messages import (
+    Controls,
     Device,
     Hello,
     Message,
@@ -208,6 +209,23 @@ class Robot:
     def name(self) -> str:
         return self._hello.robot_name
 
+    @property
+    def kind(self) -> str:
+        """`biped`, `wheeled`, `quadruped`, `arm`, or `other`."""
+        return self._hello.kind
+
+    @property
+    def controls(self) -> Controls:
+        """Robot-level operations the body announced, with their limits."""
+        return {op: dict(limits) for op, limits in self._hello.controls.items()}
+
+    @property
+    def hello(self) -> Hello:
+        return self._hello
+
+    def supports(self, op: str) -> bool:
+        return self._hello.supports(op)
+
     def devices(self) -> list[Device]:
         result = self._request("devices.list", {})
         self._devices = list(parse_devices_from_body(result.body or {}))
@@ -216,6 +234,21 @@ class Robot:
     def servo(self, device_id: str) -> Servo:
         self._require(device_id, "servo")
         return Servo(self, device_id)
+
+    def move(self, forward: float = 0.0, lateral: float = 0.0, yaw: float = 0.0) -> None:
+        """Body velocity: forward and lateral in m/s, yaw in rad/s (positive turns left)."""
+        self._require_control("motion.velocity")
+        body = {"forward": forward, "lateral": lateral, "yaw": yaw}
+        result = self._request("motion.velocity", body)
+        self._note_safety(result.body or {})
+
+    def look(self, pitch: float = 0.0, yaw: float = 0.0, roll: float = 0.0, neck_pitch: float = 0.0) -> None:
+        """Head pose in radians. Only the fields the robot announced are sent."""
+        limits = self._require_control("head.pose")
+        wanted = {"pitch": pitch, "yaw": yaw, "roll": roll, "neck_pitch": neck_pitch}
+        body = {name: value for name, value in wanted.items() if name in limits or value}
+        result = self._request("head.pose", body)
+        self._note_safety(result.body or {})
 
     def walk(
         self,
@@ -227,19 +260,25 @@ class Robot:
         head_yaw: float = 0.0,
         head_roll: float = 0.0,
     ) -> None:
-        result = self._request(
-            "walk.velocity",
-            {
-                "forward": forward,
-                "lateral": lateral,
-                "yaw": yaw,
-                "neck_pitch": neck_pitch,
-                "head_pitch": head_pitch,
-                "head_yaw": head_yaw,
-                "head_roll": head_roll,
-            },
-        )
-        self._note_safety(result.body or {})
+        """Open Duck Mini's 7-number command. `move` and `look` work on any robot."""
+        if self.supports("walk.velocity"):
+            result = self._request(
+                "walk.velocity",
+                {
+                    "forward": forward,
+                    "lateral": lateral,
+                    "yaw": yaw,
+                    "neck_pitch": neck_pitch,
+                    "head_pitch": head_pitch,
+                    "head_yaw": head_yaw,
+                    "head_roll": head_roll,
+                },
+            )
+            self._note_safety(result.body or {})
+            return
+        self.move(forward=forward, lateral=lateral, yaw=yaw)
+        if self.supports("head.pose"):
+            self.look(pitch=head_pitch, yaw=head_yaw, roll=head_roll, neck_pitch=neck_pitch)
 
     def motor(self, device_id: str) -> Motor:
         self._require(device_id, "motor")
@@ -255,6 +294,11 @@ class Robot:
 
     def stop(self) -> None:
         result = self._request("robot.stop", {})
+        self._note_safety(result.body or {})
+
+    def reset(self) -> None:
+        """Back to the neutral pose and, in a simulator, back on its feet at the origin."""
+        result = self._request("robot.reset", {})
         self._note_safety(result.body or {})
 
     def estop(self) -> None:
@@ -294,6 +338,11 @@ class Robot:
     def _note_safety(self, body: dict) -> None:
         if "safety" in body:
             self._safety = parse_safety_state(body)
+
+    def _require_control(self, op: str) -> dict[str, tuple[float, float]]:
+        if not self.supports(op):
+            raise RobotError("unsupported", f"{self.name} does not accept {op}")
+        return self._hello.controls[op]
 
     def _require(self, device_id: str, device_type: str) -> Device:
         matches = [device for device in self._devices if device.id == device_id]

@@ -14,14 +14,29 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class RobotException(val code: String, message: String) : Exception(message)
 
+/** Inclusive limit a robot announced for one command field. */
+data class Limit(val low: Double, val high: Double)
+
 /**
- * TCP client for protocol 0.1. Each message is one JSON object and a newline.
- * The laptop simulator, and later the duck, speak this.
+ * TCP client for protocol 0.2 (and 0.1 robots). Each message is one JSON object and a newline.
+ *
+ * On connect the robot says what it is and which robot-level commands it accepts, with
+ * limits. `walk` then sends the Follow Me decision as `motion.velocity`, rescaled to the
+ * robot's limits, plus `head.pose` if the robot has a head. A 0.1 duck still gets the
+ * old `walk.velocity`.
  */
 class RobotClient private constructor(private val socket: Socket) {
     var name: String = ""
         private set
+    var kind: String = "other"
+        private set
     var servoCount: Int = 0
+        private set
+    var deviceCount: Int = 0
+        private set
+
+    /** op -> field -> limit, as announced in `session.hello`. */
+    var controls: Map<String, Map<String, Limit>> = emptyMap()
         private set
 
     @Volatile
@@ -35,7 +50,23 @@ class RobotClient private constructor(private val socket: Socket) {
     private val hello = LinkedBlockingQueue<JSONObject>()
     private val thread = Thread(::readLoop, "jiadroid-read")
 
+    fun supports(op: String): Boolean = controls.containsKey(op)
+
     fun walk(decision: FollowDecision) {
+        if (supports("motion.velocity")) {
+            val limits = controls.getValue("motion.velocity")
+            val motion = JSONObject()
+            motion.put("forward", fit(decision.forward.toDouble(), DUCK_FORWARD, limits["forward"]))
+            motion.put("lateral", fit(decision.lateral.toDouble(), DUCK_LATERAL, limits["lateral"]))
+            motion.put("yaw", fit(decision.yaw.toDouble(), DUCK_YAW, limits["yaw"]))
+            noteSafety(request("motion.velocity", motion, 2000))
+            if (supports("head.pose")) {
+                val head = JSONObject()
+                head.put("yaw", clamp(decision.headYaw.toDouble(), controls.getValue("head.pose")["yaw"]))
+                noteSafety(request("head.pose", head, 2000))
+            }
+            return
+        }
         val body = JSONObject()
         body.put("forward", decision.forward.toDouble())
         body.put("lateral", decision.lateral.toDouble())
@@ -83,14 +114,18 @@ class RobotClient private constructor(private val socket: Socket) {
         }
         val body = message.optJSONObject("body")
             ?: throw IllegalStateException("Simulator hello was empty")
-        if (body.optString("protocol") != "jiadroid" || body.optString("version") != "0.1") {
-            throw IllegalStateException("Not a Jiadroid simulator")
+        val version = body.optString("version")
+        if (body.optString("protocol") != "jiadroid" || version !in SUPPORTED_VERSIONS) {
+            throw IllegalStateException("Not a Jiadroid robot")
         }
         val robot = body.optJSONObject("robot")
             ?: throw IllegalStateException("Simulator hello was empty")
         name = robot.optString("name").ifEmpty { "Robot" }
+        kind = robot.optString("kind").ifEmpty { if (version == "0.1") "biped" else "other" }
         safety = body.optJSONObject("safety")?.optString("state")?.ifEmpty { "ready" } ?: "ready"
         servoCount = countServos(body.optJSONArray("devices"))
+        deviceCount = body.optJSONArray("devices")?.length() ?: 0
+        controls = if (version == "0.1") legacyDuckControls() else parseControls(body.optJSONObject("controls"))
     }
 
     private fun request(op: String, body: JSONObject, timeoutMs: Long): JSONObject {
@@ -155,6 +190,13 @@ class RobotClient private constructor(private val socket: Socket) {
     }
 
     companion object {
+        private val SUPPORTED_VERSIONS = setOf("0.1", "0.2")
+
+        // Follow Me decides in Open Duck Mini units; `fit` rescales to the connected body.
+        private const val DUCK_FORWARD = 0.15
+        private const val DUCK_LATERAL = 0.2
+        private const val DUCK_YAW = 1.0
+
         fun connect(host: String, port: Int): RobotClient {
             val socket = Socket()
             try {
@@ -184,4 +226,47 @@ private fun countServos(devices: JSONArray?): Int {
         if (devices.optJSONObject(index)?.optString("type") == "servo") count += 1
     }
     return count
+}
+
+internal fun parseControls(controls: JSONObject?): Map<String, Map<String, Limit>> {
+    if (controls == null) return emptyMap()
+    val result = HashMap<String, Map<String, Limit>>()
+    for (op in controls.keys()) {
+        val limits = controls.optJSONObject(op) ?: continue
+        val fields = HashMap<String, Limit>()
+        for (field in limits.keys()) {
+            val span = limits.optJSONArray(field) ?: continue
+            if (span.length() != 2) continue
+            fields[field] = Limit(span.optDouble(0, 0.0), span.optDouble(1, 0.0))
+        }
+        result[op] = fields
+    }
+    return result
+}
+
+internal fun legacyDuckControls(): Map<String, Map<String, Limit>> = mapOf(
+    "walk.velocity" to emptyMap(),
+    "motion.velocity" to mapOf(
+        "forward" to Limit(-0.15, 0.15),
+        "lateral" to Limit(-0.2, 0.2),
+        "yaw" to Limit(-1.0, 1.0),
+    ),
+    "head.pose" to mapOf(
+        "neck_pitch" to Limit(-0.34, 1.1),
+        "pitch" to Limit(-0.78, 0.3),
+        "yaw" to Limit(-0.5, 0.5),
+        "roll" to Limit(-0.5, 0.5),
+    ),
+)
+
+/** Rescale a duck-unit value to another robot's limit. Unannounced fields become 0. */
+internal fun fit(value: Double, duckBound: Double, limit: Limit?): Double {
+    if (limit == null) return 0.0
+    val bound = if (value >= 0) limit.high else -limit.low
+    return value / duckBound * bound
+}
+
+internal fun clamp(value: Double, limit: Limit?): Double {
+    if (limit == null) return 0.0
+    return value.coerceIn(limit.low, limit.high)
 }

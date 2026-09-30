@@ -343,7 +343,7 @@ class MainActivity : AppCompatActivity() {
                     link.set(robot)
                     lastCommandKey = null
                     binding.connect.text = getString(R.string.disconnect)
-                    binding.link.text = getString(R.string.connected, robot.name, robot.servoCount, host, port)
+                    binding.link.text = getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port)
                 }
             } catch (error: Exception) {
                 handler.post {

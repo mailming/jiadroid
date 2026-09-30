@@ -4,17 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jiadroid"
-version = "0.1.0"
-description = "Phone-to-robot protocol for an Open Duck Mini, with a Follow Me demo and Android and iOS marker tests"
+version = "0.2.0"
+description = "Phone-to-robot protocol with simulated bodies (Open Duck Mini, a rover), a MuJoCo physics duck, and a Gymnasium environment for reinforcement learning"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# MuJoCo physics duck behind the protocol: python -m jiadroid.sim --robot duck-physics
+sim = ["mujoco>=3.1", "numpy>=1.26"]
+# Gymnasium environment: import jiadroid.rl
+rl = ["mujoco>=3.1", "numpy>=1.26", "gymnasium>=1.0"]
+# Training with Stable-Baselines3: examples/train_duck.py
+train = ["mujoco>=3.1", "numpy>=1.26", "gymnasium>=1.0", "stable-baselines3>=2.3", "torch>=2.2", "onnx>=1.15", "onnxruntime>=1.17", "tensorboard>=2.15"]
+# Run .onnx policies from Open Duck Playground or from our training
+onnx = ["onnxruntime>=1.17", "numpy>=1.26"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+jiadroid = ["sim/assets/**/*.xml", "sim/assets/**/*.stl", "sim/assets/**/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

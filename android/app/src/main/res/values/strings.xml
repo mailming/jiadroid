@@ -9,7 +9,7 @@
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="connecting">Connecting…</string>
-    <string name="connected">Sending commands to %1$s · %2$d servos at %3$s:%4$d</string>
+    <string name="connected">Sending commands to %1$s (%2$s) · %3$d devices at %4$s:%5$d</string>
     <string name="code_width">QR code</string>
     <string name="person_height">Person height</string>
     <string name="millimeters">mm</string>
