@@ -16,11 +16,12 @@ from typing import Any
 
 import numpy as np
 
-from jiadroid.protocol.messages import Device
+from jiadroid.protocol.messages import Device, Payload
 from jiadroid.sim.body import Body
 from jiadroid.sim.duck import (
     DUCK_CONTROLS,
     DUCK_DEVICES,
+    DUCK_MOUNTS,
     HEAD_FIELD_TO_JOINT,
     JOINT_NAMES,
     ROBOT_ID,
@@ -53,7 +54,7 @@ class DuckPhysicsBody(Body):
         gait_period_s: float = GAIT_PERIOD_S,
         auto_reset: bool = True,
     ) -> None:
-        super().__init__(DUCK_DEVICES + SENSOR_DEVICES, DUCK_CONTROLS)
+        super().__init__(DUCK_DEVICES + SENSOR_DEVICES, DUCK_CONTROLS, DUCK_MOUNTS)
         self.physics = DuckPhysics() if xml_path is None else DuckPhysics(xml_path)
         if policy is None or isinstance(policy, (str, Path)):
             policy = load_policy(policy)
@@ -79,6 +80,18 @@ class DuckPhysicsBody(Body):
             return self._falls
 
     # ---- Body hooks ---------------------------------------------------------------
+
+    def _do_payload(self, payload: Payload | None) -> None:
+        if payload is None:
+            self.physics.clear_phone()
+            return
+        mount = next(item for item in DUCK_MOUNTS if item.id == payload.mount)
+        self.physics.set_phone(
+            payload.mount,
+            np.array(payload.position_on(mount)),
+            np.array(payload.size),
+            payload.mass,
+        )
 
     def _do_stop(self) -> None:
         self._overrides.clear()

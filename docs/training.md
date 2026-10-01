@@ -157,6 +157,8 @@ Everything about the task is in one dataclass, `DuckEnvConfig` in `src/jiadroid/
 
 **Randomisation.** Sensor noise (`noise`), a random 0 to 3 step delay on actions and IMU readings, a random push every 5 to 10 seconds, random floor friction, and a scaled starting pose (`init_joint_scale`, each joint times 0.8 to 1.2; upstream uses 0.5 to 1.5, which knocks the duck over in a third of episodes before the policy acts and is only worth it with a GPU-sized budget). These are what make a simulated walk survive contact with a real floor. Turn them off with `config.clean()` for evaluation only. Training without them produces a policy that walks in the simulator and falls in the world.
 
+**The phone.** `carry_phone` (on by default) puts a real phone on the duck at every reset: one of the models in `jiadroid.protocol.phones`, on the `head` or the `back` mount, shifted by up to `phone_offset` (2 cm) from the mount point. The mass is not in the observation. The policy feels it through the IMU and the way the body falls. `clean()` keeps the phone, because the phone is part of the robot. `carry_phone=False` is the bare duck that upstream policies were trained on.
+
 **Commands.** `lin_vel_x`, `lin_vel_y`, `ang_vel_yaw`, and the head ranges control what the duck practices. A command is resampled every 500 steps, and 10% of commands are zero so the duck also learns to stand.
 
 **Episode.** `episode_length` is 1,000 steps (20 seconds). The episode ends early when the duck is no longer upright.

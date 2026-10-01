@@ -22,6 +22,7 @@ def physics():
 
 def test_model_matches_the_runtime(physics) -> None:
     assert physics.joint_names == JOINT_NAMES
+    assert physics.model.nq == 21
     assert physics.model.nu == NUM_JOINTS
     assert physics.n_substeps == 10
     for i, name in enumerate(JOINT_NAMES):
@@ -92,10 +93,35 @@ def robot(server):
         bot.close()
 
 
+def test_phone_mass_rides_on_the_link() -> None:
+    physics = DuckPhysics()
+    physics.set_phone("head", np.array([0.02, 0.0, 0.22]), np.array([0.0078, 0.0716, 0.1476]), 0.170)
+    assert physics.phone_mass("head") == pytest.approx(0.170)
+    assert physics.phone_mass("back") == pytest.approx(1e-4)
+    assert physics.model.nq == 21
+    head = physics.data.xpos[physics._phone_ids["head"]].copy()
+    back = physics.data.xpos[physics._phone_ids["back"]].copy()
+    physics.data.qpos[physics._qpos_adr[6]] = 0.5  # head_pitch
+    physics.forward()
+    assert np.linalg.norm(physics.data.xpos[physics._phone_ids["head"]] - head) > 0.01
+    assert np.linalg.norm(physics.data.xpos[physics._phone_ids["back"]] - back) < 1e-6
+    physics.data.qpos[physics._qpos_adr[6]] = 0.0
+    physics.forward()
+    for _ in range(100):
+        physics.step(physics.standing)
+    assert physics.is_upright()
+    physics.clear_phone()
+    assert physics.phone_mass("head") == pytest.approx(1e-4)
+
+
 def test_physics_duck_behind_the_protocol(robot, server) -> None:
     assert robot.name == "Open Duck Mini"
     assert robot.kind == "biped"
     assert robot.supports("motion.velocity") and robot.supports("head.pose")
+    assert [mount.id for mount in robot.mounts] == ["head", "back"]
+    placed = robot.set_payload("head", 0.170, (0.0078, 0.0716, 0.1476), name="iPhone 16")
+    assert placed["name"] == "iPhone 16"
+    assert server.body.physics.phone_mass("head") == pytest.approx(0.170)
     servos = [d for d in robot.devices() if d.type == "servo"]
     assert [d.id for d in servos] == list(JOINT_NAMES)
     assert robot.sensor("upright").read() == 1.0

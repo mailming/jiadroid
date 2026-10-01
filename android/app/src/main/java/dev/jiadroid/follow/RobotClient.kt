@@ -35,6 +35,10 @@ class RobotClient private constructor(private val socket: Socket) {
     var deviceCount: Int = 0
         private set
 
+    /** Mount ids from `session.hello`, in order. */
+    var mounts: List<String> = emptyList()
+        private set
+
     /** op -> field -> limit, as announced in `session.hello`. */
     var controls: Map<String, Map<String, Limit>> = emptyMap()
         private set
@@ -126,6 +130,35 @@ class RobotClient private constructor(private val socket: Socket) {
         servoCount = countServos(body.optJSONArray("devices"))
         deviceCount = body.optJSONArray("devices")?.length() ?: 0
         controls = if (version == "0.1") legacyDuckControls() else parseControls(body.optJSONObject("controls"))
+        mounts = parseMounts(body.optJSONArray("mounts"))
+    }
+
+    /** Tell the robot what this phone weighs and which dock it is on. A refusal does not drop the link. */
+    private fun declarePhone() {
+        val ids = mounts
+        if (ids.isEmpty()) return
+        val mount = when {
+            "head" in ids -> "head"
+            "deck" in ids -> "deck"
+            else -> ids.first()
+        }
+        val phone = thisPhone()
+        val vertical = mount != "deck"
+        val size = if (vertical) {
+            listOf(phone.thickness, phone.width, phone.height)
+        } else {
+            listOf(phone.height, phone.width, phone.thickness)
+        }
+        val body = JSONObject()
+        body.put("mount", mount)
+        body.put("mass", phone.mass)
+        body.put("size", JSONArray(size))
+        body.put("offset", JSONArray(listOf(0.0, 0.0, 0.0)))
+        body.put("name", phone.name)
+        try {
+            request("payload.set", body, 2000)
+        } catch (_: Exception) {
+        }
     }
 
     private fun request(op: String, body: JSONObject, timeoutMs: Long): JSONObject {
@@ -210,6 +243,7 @@ class RobotClient private constructor(private val socket: Socket) {
             try {
                 client.start()
                 client.awaitHello(5000)
+                client.declarePhone()
             } catch (error: Exception) {
                 client.close()
                 throw error
@@ -226,6 +260,45 @@ private fun countServos(devices: JSONArray?): Int {
         if (devices.optJSONObject(index)?.optString("type") == "servo") count += 1
     }
     return count
+}
+
+internal fun parseMounts(mounts: JSONArray?): List<String> {
+    if (mounts == null) return emptyList()
+    val ids = ArrayList<String>()
+    for (index in 0 until mounts.length()) {
+        val id = mounts.optJSONObject(index)?.optString("id").orEmpty()
+        if (id.isNotEmpty()) ids.add(id)
+    }
+    return ids
+}
+
+/** Bare-phone mass (kg) and width, height, thickness (m). Keep in step with docs/protocol.md. */
+internal data class PhoneSpec(val name: String, val mass: Double, val width: Double, val height: Double, val thickness: Double)
+
+private val PHONES = listOf(
+    PhoneSpec("iPhone 16 Pro Max", 0.227, 0.0776, 0.1630, 0.0083),
+    PhoneSpec("iPhone 16 Plus", 0.199, 0.0778, 0.1609, 0.0078),
+    PhoneSpec("iPhone 16 Pro", 0.199, 0.0715, 0.1496, 0.0083),
+    PhoneSpec("iPhone 16", 0.170, 0.0716, 0.1476, 0.0078),
+    PhoneSpec("iPhone 15 Pro Max", 0.221, 0.0767, 0.1599, 0.0083),
+    PhoneSpec("iPhone 15 Plus", 0.201, 0.0778, 0.1609, 0.0078),
+    PhoneSpec("iPhone 15 Pro", 0.187, 0.0706, 0.1466, 0.0083),
+    PhoneSpec("iPhone 15", 0.171, 0.0716, 0.1476, 0.0078),
+    PhoneSpec("Pixel 9 Pro XL", 0.221, 0.0765, 0.1628, 0.0085),
+    PhoneSpec("Pixel 9 Pro", 0.199, 0.0720, 0.1528, 0.0085),
+    PhoneSpec("Pixel 9", 0.198, 0.0720, 0.1528, 0.0085),
+    PhoneSpec("Pixel 8 Pro", 0.213, 0.0765, 0.1626, 0.0088),
+    PhoneSpec("Pixel 8", 0.187, 0.0708, 0.1505, 0.0089),
+)
+
+private val GENERIC_PHONE = PhoneSpec("generic", 0.190, 0.073, 0.155, 0.008)
+
+internal fun thisPhone(): PhoneSpec {
+    val model = android.os.Build.MODEL.orEmpty()
+    val match = PHONES.firstOrNull { model.contains(it.name, ignoreCase = true) }
+    if (match != null) return match
+    val label = listOf(android.os.Build.MANUFACTURER.orEmpty(), model).filter { it.isNotBlank() }.joinToString(" ")
+    return GENERIC_PHONE.copy(name = label.ifBlank { "generic" })
 }
 
 internal fun parseControls(controls: JSONObject?): Map<String, Map<String, Limit>> {

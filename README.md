@@ -41,7 +41,7 @@ USB made it possible to plug almost any keyboard, camera, or printer into almost
 
 Jiadroid tries to do the same for robots.
 
-When a phone connects, the robot introduces itself twice over. First, what kind of body it is and which commands it takes: "I can move at up to 0.15 m/s and turn at 1 rad/s, and I have a head that pitches and yaws," or "I can move at 0.5 m/s and turn at 2 rad/s, and that is all." Second, the parts: "I have these 14 leg and head servos," or "I have two drive wheels, two encoders, and a bump switch." The phone does not need a custom driver for each machine. It reads those lists, scales its decisions to the limits, and knows what it can control.
+When a phone connects, the robot introduces itself. It says what kind of body it is and which commands it takes: "I can move at up to 0.15 m/s and turn at 1 rad/s, and I have a head that pitches and yaws," or "I can move at 0.5 m/s and turn at 2 rad/s, and that is all." It lists its parts: "I have these 14 leg and head servos," or "I have two drive wheels, two encoders, and a bump switch." And it says where a phone can sit. The phone answers with its own weight and size, because a 170 g phone and a 230 g phone are not the same load, and a phone on the head is not the same load as a phone on the back. The phone does not need a custom driver for each machine. It reads those lists, scales its decisions to the limits, and knows what it can control.
 
 The robot stays simple. It needs a small controller that moves its hardware, reports back what happened, and stops safely when asked. That controller is an ESP32. It already has Wi-Fi, Bluetooth, and USB serial, so the phone can use whichever of those the robot has. The ESP32 does not see, hear, or decide. The phone does that.
 
@@ -95,9 +95,11 @@ The duck's own walking software still handles balance and each leg joint. The ph
 
 That split is the point: the phone is the brain, and the robot keeps the reflexes it needs to move safely.
 
-## Second body: a rover
+## First prototype: a 2WD chassis, phone on top
 
-To prove that the phone side is general, the simulator also ships a two-wheel rover: the shape of a robot vacuum or a classroom robot. It has drive motors, wheel encoders, a bump switch, and a range sensor, and no head. It announces only "move", and the same Follow Me app drives it, scaled up to its speed.
+The first base is a [DIYables 2WD robot car chassis](https://www.amazon.com/dp/B0H4V8TR38): two DC motors with encoders, an L9110S motor driver, a caster, and a top plate. The kit is listed at 0.32 kg. The phone stands on that plate, screen facing forward, because Follow Me uses the front camera. A phone lying flat would look at the ceiling.
+
+The chassis announces one mount, `top`, and only a move command. The same Follow Me app drives it, scaled to about 0.4 m/s. In the simulator this is `--robot rover`. The wheel track, the plate height, and the encoder slot count are the usual ones for this kind of chassis; the listing does not print them, so they get measured on the real plate.
 
 ## Try it on a laptop
 
@@ -164,7 +166,7 @@ The phone and the laptop need to be on the same Wi-Fi. The simulator prints the 
 
 ## What exists today
 
-- A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, and its parts. The phone sends commands scaled to those limits. The robot reports what it is doing.
+- A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, its parts, and where a phone can be mounted. The phone sends commands scaled to those limits, and reports its own weight, size, and which mount it is on. The robot reports what it is doing.
 - Safety built into the language. A stop command halts motion, an emergency stop blocks all movement until someone clears it, and a reset puts a simulated robot back on its feet.
 - Three simulated bodies behind that one language: a kinematic Open Duck Mini, a two-wheel rover, and an Open Duck Mini in MuJoCo physics.
 - A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
@@ -178,7 +180,7 @@ The phone and the laptop need to be on the same Wi-Fi. The simulator prints the 
 - Telling people apart. With several people in view, the phone follows whichever one the pose detector picks.
 - ESP32 firmware that speaks this language and drives a real body. A dock that mounts the phone on the duck, and a connection from that ESP32 to a real Open Duck Mini, so the phone's `motion.velocity` is written into `RLWalk.last_commands` in place of the game controller.
 - Bluetooth and USB connections. The phone reaches the simulators over the network.
-- A physical second body. The rover exists only as a simulator.
+- Firmware for the 2WD chassis. The simulator already speaks for it. What is missing is ESP32 code that drives the L9110S from `motion.velocity` and counts the motor encoders, with the phone standing on the top plate.
 
 ## Where this goes
 

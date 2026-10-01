@@ -226,6 +226,29 @@ class Robot:
     def supports(self, op: str) -> bool:
         return self._hello.supports(op)
 
+    @property
+    def mounts(self):
+        """Where this robot can carry a phone: id, position in the body frame, max mass."""
+        return self._hello.mounts
+
+    def set_payload(
+        self,
+        mount: str,
+        mass: float,
+        size: tuple[float, float, float],
+        offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        name: str = "",
+    ) -> dict:
+        """Tell the robot which phone is on `mount`. `mass` is kg, `size` is [x, y, z] meters."""
+        body: dict = {"mount": mount, "mass": mass, "size": list(size), "offset": list(offset)}
+        if name:
+            body["name"] = name
+        result = self._request("payload.set", body)
+        return result.body or {}
+
+    def clear_payload(self) -> None:
+        self._request("payload.clear", {})
+
     def devices(self) -> list[Device]:
         result = self._request("devices.list", {})
         self._devices = list(parse_devices_from_body(result.body or {}))

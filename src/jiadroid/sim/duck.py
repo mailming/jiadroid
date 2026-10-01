@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from jiadroid.protocol.messages import Controls, Device
+from jiadroid.protocol.messages import Controls, Device, Mount
 from jiadroid.sim.body import Body
 
 # name, standing position in radians. Order matches the runtime.
@@ -85,6 +85,15 @@ DUCK_CONTROLS: Controls = {
 
 DUCK_DEVICES = tuple(Device("servo", name, ("position",)) for name in JOINT_NAMES)
 
+# Body frame: x forward, y left, z up, origin at the trunk (the hip).
+# `position` is where a centered phone's center of mass sits, in meters,
+# at the standing pose. `head` is on the face; `back` is on the rear shell.
+# A mount holds at most 0.30 kg, a large phone with a light case.
+DUCK_MOUNTS = (
+    Mount("head", (0.02, 0.0, 0.22), 0.30),
+    Mount("back", (-0.055, 0.0, 0.09), 0.30),
+)
+
 GAIT_RATE = 7.0
 SWING_RAD = 0.18
 
@@ -110,7 +119,7 @@ class DuckBody(Body):
     kind = "biped"
 
     def __init__(self) -> None:
-        super().__init__(DUCK_DEVICES, DUCK_CONTROLS)
+        super().__init__(DUCK_DEVICES, DUCK_CONTROLS, DUCK_MOUNTS)
         self._positions = dict(STANDING)
         self._phase = 0.0
 

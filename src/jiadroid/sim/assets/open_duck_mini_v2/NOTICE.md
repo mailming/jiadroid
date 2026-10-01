@@ -13,7 +13,7 @@ The meshes were exported with onshape-to-robot from Onshape document `64074dfcfa
 
 Changes made here:
 
-- `open_duck_mini_v2.xml`: removed the MJX-tuned `<option iterations="1" ls_iterations="5">`.
+- `open_duck_mini_v2.xml`: removed the MJX-tuned `<option iterations="1" ls_iterations="5">`, and added two massless `phone_head` and `phone_back` bodies. They are not part of the upstream model. A `payload.set` gives one of them the phone's mass.
 - `scene_flat_terrain.xml`: rewritten with the same floor, `home` keyframe, and a lit checker floor.
 
 Everything else is as upstream. Thank you to the Open Duck community.

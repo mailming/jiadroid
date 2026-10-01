@@ -13,8 +13,10 @@ rewarded for walking at that velocity without falling. This follows the
   still with a zero command, and leaving the standing pose. The upstream
   imitation reward needs reference motions this repository does not ship;
   `pose` and `feet_air_time` stand in for it.
-- Randomisation: sensor noise, action and IMU delay, periodic pushes, and
-  floor friction. Set `noise_level=0` and `push=False` for a clean sim.
+- Randomisation: sensor noise, action and IMU delay, periodic pushes,
+  floor friction, and the phone on the robot (which model, which mount,
+  and a small shift from the mount point). Set `carry_phone=False` to
+  train the bare duck. Set `noise_level=0` and `push=False` for a clean sim.
 
 Requires the `rl` extra: `pip install -e ".[rl]"`.
 """
@@ -26,6 +28,8 @@ from typing import Any
 
 import numpy as np
 
+from jiadroid.protocol.phones import PHONES
+from jiadroid.sim.duck import DUCK_MOUNTS
 from jiadroid.sim.physics import (
     ACTION_SCALE,
     COMMAND_SIZE,
@@ -110,6 +114,10 @@ class DuckEnvConfig:
     # about a third of episodes before the policy acts, which a GPU budget of
     # hundreds of millions of steps absorbs and a laptop budget does not.
     init_joint_scale: Range = (0.8, 1.2)
+    # The phone is part of the robot, not sensor noise, so `clean()` keeps it.
+    # `carry_phone=False` is the bare duck the upstream policies were trained on.
+    carry_phone: bool = True
+    phone_offset: float = 0.02
 
     rewards: RewardScales = field(default_factory=RewardScales)
     tracking_sigma: float = 0.01
@@ -158,6 +166,8 @@ class DuckJoystickEnv(gym.Env):
                 self._pose_weights[i] = 0.01
 
         self.command = np.zeros(COMMAND_SIZE)
+        self._phone_mass = 0.0
+        self._phone_mount = ""
         self.history = ActionHistory()
         self.motor_targets = self.standing.copy()
         self._action_buffer = np.zeros((max(1, cfg.action_delay_steps), NUM_JOINTS))
@@ -178,6 +188,7 @@ class DuckJoystickEnv(gym.Env):
         p = self.physics
 
         p.reset()
+        self._place_phone(rng)
         if cfg.floor_friction is not None:
             p.set_floor_friction(float(_uniform(rng, cfg.floor_friction)))
         p.set_base(xy=_uniform(rng, (-0.05, 0.05), 2), yaw=float(_uniform(rng, (-np.pi, np.pi))))
@@ -408,4 +419,21 @@ class DuckJoystickEnv(gym.Env):
             "gyro": p.gyro(),
             "upright": p.is_upright(),
             "step": self._step,
+            "phone_mass": self._phone_mass,
+            "phone_mount": self._phone_mount,
         }
+
+    def _place_phone(self, rng: np.random.Generator) -> None:
+        cfg = self.config
+        if not cfg.carry_phone:
+            self.physics.clear_phone()
+            self._phone_mass = 0.0
+            self._phone_mount = ""
+            return
+        phone = PHONES[int(rng.integers(len(PHONES)))]
+        mount = DUCK_MOUNTS[int(rng.integers(len(DUCK_MOUNTS)))]
+        offset = rng.uniform(-cfg.phone_offset, cfg.phone_offset, 3)
+        position = np.array(mount.position) + offset
+        self.physics.set_phone(mount.id, position, np.array(phone.size_in_body(mount.id)), phone.mass)
+        self._phone_mass = phone.mass
+        self._phone_mount = mount.id

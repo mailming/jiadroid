@@ -27,6 +27,11 @@ HEAD_FIELDS = ("pitch", "yaw", "roll", "neck_pitch")
 # Limits are a `{field: [low, high]}` map per announced operation.
 Controls = dict[str, dict[str, tuple[float, float]]]
 
+# A phone the robot did not list a mount for cannot be larger than this on
+# any side, and its center can sit at most this far from the mount point.
+PHONE_MAX_EXTENT_M = 0.25
+PHONE_MAX_OFFSET_M = 0.05
+
 _KINDS = frozenset({"req", "res", "evt"})
 _ENVELOPE_FIELDS = frozenset({"v", "kind", "op", "id", "body", "error"})
 
@@ -77,6 +82,48 @@ class Message:
 
 
 @dataclass(frozen=True)
+class Mount:
+    """Where a phone may sit, in the body frame: x forward, y left, z up, meters."""
+
+    id: str
+    position: tuple[float, float, float]
+    max_mass: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "position": list(self.position), "max_mass": self.max_mass}
+
+
+@dataclass(frozen=True)
+class Payload:
+    """The phone currently on a mount. `size` is full extents [x, y, z] in meters."""
+
+    mount: str
+    mass: float
+    size: tuple[float, float, float]
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    name: str = ""
+
+    def position_on(self, mount: Mount) -> tuple[float, float, float]:
+        return (
+            mount.position[0] + self.offset[0],
+            mount.position[1] + self.offset[1],
+            mount.position[2] + self.offset[2],
+        )
+
+    def to_dict(self, position: tuple[float, float, float]) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "mount": self.mount,
+            "mass": self.mass,
+            "size": list(self.size),
+            "offset": list(self.offset),
+            "position": list(position),
+        }
+        if self.name:
+            body["name"] = self.name
+        return body
+
+
+@dataclass(frozen=True)
 class Hello:
     protocol: str
     version: str
@@ -86,9 +133,16 @@ class Hello:
     devices: tuple[Device, ...]
     kind: str = "other"
     controls: Controls = field(default_factory=dict)
+    mounts: tuple[Mount, ...] = ()
 
     def supports(self, op: str) -> bool:
         return op in self.controls
+
+    def mount(self, mount_id: str) -> Mount | None:
+        for mount in self.mounts:
+            if mount.id == mount_id:
+                return mount
+        return None
 
 
 @dataclass(frozen=True)
@@ -100,6 +154,7 @@ class TelemetrySample:
     motors: dict[str, float] = field(default_factory=dict)
     sensors: dict[str, float] = field(default_factory=dict)
     base: dict[str, float] = field(default_factory=dict)
+    payload: dict[str, Any] | None = None
 
     @property
     def commands(self) -> dict[str, float]:
@@ -200,6 +255,72 @@ def parse_controls(data: object) -> Controls:
     return controls
 
 
+def parse_mounts(data: object) -> tuple[Mount, ...]:
+    """`[{id, position: [x, y, z], max_mass}]`. Missing means the robot has no phone dock."""
+    from jiadroid.errors import ProtocolError
+
+    if data is None:
+        return ()
+    if not isinstance(data, list):
+        raise ProtocolError("mounts must be a list")
+    mounts: list[Mount] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            raise ProtocolError("mount must be an object")
+        mount_id = item.get("id")
+        if not isinstance(mount_id, str) or not mount_id or mount_id in seen:
+            raise ProtocolError("invalid mount id")
+        seen.add(mount_id)
+        position = _parse_vec3(item.get("position"), "mount position", -2.0, 2.0)
+        max_mass = item.get("max_mass")
+        if isinstance(max_mass, bool) or not isinstance(max_mass, (int, float)) or not (0 < float(max_mass) <= 5):
+            raise ProtocolError("invalid mount max_mass")
+        mounts.append(Mount(mount_id, position, float(max_mass)))
+    return tuple(mounts)
+
+
+def parse_payload(data: object, mounts: tuple[Mount, ...]) -> Payload:
+    """A `payload.set` body. Raises ProtocolError; the robot side raises RobotError itself."""
+    from jiadroid.errors import ProtocolError
+
+    if not isinstance(data, dict):
+        raise ProtocolError("payload must be an object")
+    mount_id = data.get("mount")
+    mount = next((item for item in mounts if item.id == mount_id), None)
+    if mount is None:
+        raise ProtocolError("unknown mount")
+    mass = data.get("mass")
+    if isinstance(mass, bool) or not isinstance(mass, (int, float)) or not (0 < float(mass) <= mount.max_mass):
+        raise ProtocolError("invalid payload mass")
+    size = _parse_vec3(data.get("size"), "payload size", 0.0, PHONE_MAX_EXTENT_M, positive=True)
+    offset = _parse_vec3(
+        data.get("offset", [0, 0, 0]), "payload offset", -PHONE_MAX_OFFSET_M, PHONE_MAX_OFFSET_M
+    )
+    name = data.get("name", "")
+    if not isinstance(name, str) or len(name) > 64 or any(ord(char) < 32 for char in name):
+        raise ProtocolError("invalid payload name")
+    return Payload(mount.id, float(mass), size, offset, name)
+
+
+def _parse_vec3(
+    data: object, label: str, low: float, high: float, positive: bool = False
+) -> tuple[float, float, float]:
+    from jiadroid.errors import ProtocolError
+
+    if not isinstance(data, list) or len(data) != 3:
+        raise ProtocolError(f"{label} must be three numbers")
+    values: list[float] = []
+    for item in data:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise ProtocolError(f"{label} must be three numbers")
+        number = float(item)
+        if number != number or number < low or number > high or (positive and number <= 0):
+            raise ProtocolError(f"{label} is out of range")
+        values.append(number)
+    return (values[0], values[1], values[2])
+
+
 def controls_to_dict(controls: Controls) -> dict[str, dict[str, list[float]]]:
     return {op: {name: [low, high] for name, (low, high) in limits.items()} for op, limits in controls.items()}
 
@@ -251,6 +372,7 @@ def parse_hello(body: dict[str, Any]) -> Hello:
         devices=parse_devices(body.get("devices")),
         kind=kind,
         controls=controls,
+        mounts=parse_mounts(body.get("mounts")),
     )
 
 
@@ -273,6 +395,7 @@ def parse_telemetry(body: dict[str, Any]) -> TelemetrySample:
         motors=_parse_number_map(body.get("motors"), "motors", optional=True),
         sensors=_parse_number_map(body.get("sensors"), "sensors", optional=True),
         base=_parse_number_map(body.get("base"), "base", optional=True),
+        payload=body.get("payload") if isinstance(body.get("payload"), dict) else None,
     )
 
 

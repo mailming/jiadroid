@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Network
 
@@ -42,6 +43,8 @@ final class RobotClient {
     private(set) var deviceCount = 0
     /// op -> field -> limit, as announced in `session.hello`.
     private(set) var controls: [String: [String: Limit]] = [:]
+    /// Mount ids from `session.hello`, in order.
+    private(set) var mounts: [String] = []
     private var safetyValue = "ready"
     var safety: String {
         lock.lock()
@@ -104,7 +107,26 @@ final class RobotClient {
         let message = client.hello
         client.lock.unlock()
         try client.readHello(message)
+        client.declarePhone()
         return client
+    }
+
+    /// Tell the robot what this phone weighs and which dock it is on. A refusal does not drop the link.
+    private func declarePhone() {
+        guard !mounts.isEmpty else { return }
+        let mount = mounts.contains("head") ? "head" : (mounts.contains("deck") ? "deck" : mounts[0])
+        let phone = thisPhone()
+        let size: [Double] = mount == "deck"
+            ? [phone.height, phone.width, phone.thickness]
+            : [phone.thickness, phone.width, phone.height]
+        let body: [String: Any] = [
+            "mount": mount,
+            "mass": phone.mass,
+            "size": size,
+            "offset": [0.0, 0.0, 0.0],
+            "name": phone.name,
+        ]
+        _ = try? request("payload.set", body: body)
     }
 
     func supports(_ op: String) -> Bool { controls[op] != nil }
@@ -181,6 +203,7 @@ final class RobotClient {
         servoCount = countServos(body["devices"] as? [Any])
         deviceCount = (body["devices"] as? [Any])?.count ?? 0
         controls = version == "0.1" ? legacyDuckControls() : parseControls(body["controls"] as? [String: Any])
+        mounts = parseMounts(body["mounts"] as? [Any])
     }
 
     private func request(_ op: String, body: [String: Any]) throws -> [String: Any] {
@@ -332,6 +355,69 @@ func parseControls(_ controls: [String: Any]?) -> [String: [String: Limit]] {
         result[op] = fields
     }
     return result
+}
+
+func parseMounts(_ mounts: [Any]?) -> [String] {
+    guard let mounts else { return [] }
+    return mounts.compactMap { item in
+        guard let object = item as? [String: Any] else { return nil }
+        let id = text(object, "id")
+        return id.isEmpty ? nil : id
+    }
+}
+
+/// Bare-phone mass (kg) and width, height, thickness (m). Keep in step with docs/protocol.md.
+struct PhoneSpec {
+    let name: String
+    let mass: Double
+    let width: Double
+    let height: Double
+    let thickness: Double
+}
+
+private let phoneCatalog: [PhoneSpec] = [
+    PhoneSpec(name: "iPhone 16 Pro Max", mass: 0.227, width: 0.0776, height: 0.1630, thickness: 0.0083),
+    PhoneSpec(name: "iPhone 16 Plus", mass: 0.199, width: 0.0778, height: 0.1609, thickness: 0.0078),
+    PhoneSpec(name: "iPhone 16 Pro", mass: 0.199, width: 0.0715, height: 0.1496, thickness: 0.0083),
+    PhoneSpec(name: "iPhone 16", mass: 0.170, width: 0.0716, height: 0.1476, thickness: 0.0078),
+    PhoneSpec(name: "iPhone 15 Pro Max", mass: 0.221, width: 0.0767, height: 0.1599, thickness: 0.0083),
+    PhoneSpec(name: "iPhone 15 Plus", mass: 0.201, width: 0.0778, height: 0.1609, thickness: 0.0078),
+    PhoneSpec(name: "iPhone 15 Pro", mass: 0.187, width: 0.0706, height: 0.1466, thickness: 0.0083),
+    PhoneSpec(name: "iPhone 15", mass: 0.171, width: 0.0716, height: 0.1476, thickness: 0.0078),
+    PhoneSpec(name: "Pixel 9 Pro XL", mass: 0.221, width: 0.0765, height: 0.1628, thickness: 0.0085),
+    PhoneSpec(name: "Pixel 9 Pro", mass: 0.199, width: 0.0720, height: 0.1528, thickness: 0.0085),
+    PhoneSpec(name: "Pixel 9", mass: 0.198, width: 0.0720, height: 0.1528, thickness: 0.0085),
+    PhoneSpec(name: "Pixel 8 Pro", mass: 0.213, width: 0.0765, height: 0.1626, thickness: 0.0088),
+    PhoneSpec(name: "Pixel 8", mass: 0.187, width: 0.0708, height: 0.1505, thickness: 0.0089),
+]
+
+private let genericPhone = PhoneSpec(name: "generic", mass: 0.190, width: 0.073, height: 0.155, thickness: 0.008)
+
+/// utsname machine id -> marketing name. Unknown models use the generic phone.
+private let iPhoneMachine = [
+    "iPhone17,3": "iPhone 16",
+    "iPhone17,4": "iPhone 16 Plus",
+    "iPhone17,1": "iPhone 16 Pro",
+    "iPhone17,2": "iPhone 16 Pro Max",
+    "iPhone15,4": "iPhone 15",
+    "iPhone15,5": "iPhone 15 Plus",
+    "iPhone16,1": "iPhone 15 Pro",
+    "iPhone16,2": "iPhone 15 Pro Max",
+]
+
+func thisPhone() -> PhoneSpec {
+    var system = utsname()
+    uname(&system)
+    let machine = withUnsafeBytes(of: &system.machine) { raw -> String in
+        let bytes = raw.bindMemory(to: CChar.self)
+        guard let base = bytes.baseAddress else { return "" }
+        return String(cString: base)
+    }
+    let marketing = iPhoneMachine[machine] ?? machine
+    if let match = phoneCatalog.first(where: { marketing.localizedCaseInsensitiveContains($0.name) }) {
+        return match
+    }
+    return PhoneSpec(name: machine.isEmpty ? "generic" : machine, mass: genericPhone.mass, width: genericPhone.width, height: genericPhone.height, thickness: genericPhone.thickness)
 }
 
 func legacyDuckControls() -> [String: [String: Limit]] {

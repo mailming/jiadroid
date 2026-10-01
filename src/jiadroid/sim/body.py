@@ -21,11 +21,15 @@ from jiadroid.protocol.messages import (
     HEAD_FIELDS,
     MAX_TELEMETRY_HZ,
     MOTION_FIELDS,
+    PHONE_MAX_EXTENT_M,
+    PHONE_MAX_OFFSET_M,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
     Controls,
     Device,
     Message,
+    Mount,
+    Payload,
     controls_to_dict,
     error_response,
     response,
@@ -54,10 +58,17 @@ class Body:
     # Per-servo position range accepted by `servo.position`, radians.
     servo_range: tuple[float, float] = (-2.5, 2.5)
 
-    def __init__(self, devices: tuple[Device, ...], controls: Controls) -> None:
+    def __init__(
+        self,
+        devices: tuple[Device, ...],
+        controls: Controls,
+        mounts: tuple[Mount, ...] = (),
+    ) -> None:
         self._lock = threading.RLock()
         self._devices = devices
         self._controls = controls
+        self._mounts = mounts
+        self._payload: Payload | None = None
         self._safety = "ready"
         self._motion = {name: 0.0 for name in controls.get("motion.velocity", {})}
         self._head = {name: 0.0 for name in controls.get("head.pose", {})}
@@ -87,6 +98,15 @@ class Body:
         with self._lock:
             return dict(self._head)
 
+    @property
+    def mounts(self) -> tuple[Mount, ...]:
+        return self._mounts
+
+    @property
+    def payload(self) -> Payload | None:
+        with self._lock:
+            return self._payload
+
     def hello_body(self) -> dict[str, Any]:
         return {
             "protocol": PROTOCOL_NAME,
@@ -94,6 +114,7 @@ class Body:
             "robot": {"id": self.robot_id, "name": self.robot_name, "kind": self.kind},
             "safety": {"state": self.safety},
             "controls": controls_to_dict(self._controls),
+            "mounts": [mount.to_dict() for mount in self._mounts],
             "devices": [device.to_dict() for device in self._devices],
         }
 
@@ -129,6 +150,10 @@ class Body:
             return self._encoder_read(body)
         if op == "sensor.read":
             return self._sensor_read(body)
+        if op == "payload.set":
+            return self._set_payload(body)
+        if op == "payload.clear":
+            return self._clear_payload()
         if op == "robot.stop":
             return self.stop()
         if op == "robot.reset":
@@ -157,6 +182,8 @@ class Body:
             }
             if self._head:
                 sample["head"] = dict(self._head)
+            if self._payload is not None:
+                sample["payload"] = self._payload_dict(self._payload)
             sample.update(self._do_snapshot())
             return sample
 
@@ -290,6 +317,26 @@ class Body:
 
     # ---- hooks for concrete bodies ---------------------------------------------
 
+    def _set_payload(self, body: dict[str, Any]) -> dict[str, Any]:
+        payload = _parse_payload(body, self._mounts)
+        with self._lock:
+            self._payload = payload
+            self._do_payload(payload)
+            return self._payload_dict(payload)
+
+    def _clear_payload(self) -> dict[str, Any]:
+        with self._lock:
+            self._payload = None
+            self._do_payload(None)
+            return {"cleared": True}
+
+    def _payload_dict(self, payload: Payload) -> dict[str, Any]:
+        mount = next(item for item in self._mounts if item.id == payload.mount)
+        return payload.to_dict(payload.position_on(mount))
+
+    def _do_payload(self, payload: Payload | None) -> None:
+        """Apply or remove the phone mass. The default remembers it and nothing else."""
+
     def _do_motion(self, command: dict[str, float]) -> None:
         pass
 
@@ -374,6 +421,39 @@ def parse_hz(body: dict[str, Any]) -> float:
     if not math.isfinite(hz) or hz <= 0 or hz > MAX_TELEMETRY_HZ:
         raise RobotError("out_of_range", "telemetry hz must be greater than 0 and at most 50")
     return hz
+
+
+def _parse_payload(body: dict[str, Any], mounts: tuple[Mount, ...]) -> Payload:
+    """Same rules as `parse_payload`, raised as a robot error."""
+    mount_id = body.get("mount")
+    mount = next((item for item in mounts if item.id == mount_id), None)
+    if not isinstance(mount_id, str) or mount is None:
+        raise RobotError("unknown_device", f"no mount named {mount_id}")
+    mass = body.get("mass")
+    if isinstance(mass, bool) or not isinstance(mass, (int, float)) or not (0 < float(mass) <= mount.max_mass):
+        raise RobotError("out_of_range", f"mass must be above 0 and at most {mount.max_mass:g} kg")
+    size = _parse_vec3(body.get("size"), "size", 0.0, PHONE_MAX_EXTENT_M, positive=True)
+    offset = _parse_vec3(body.get("offset", [0, 0, 0]), "offset", -PHONE_MAX_OFFSET_M, PHONE_MAX_OFFSET_M)
+    name = body.get("name", "")
+    if not isinstance(name, str) or len(name) > 64 or any(ord(char) < 32 for char in name):
+        raise RobotError("out_of_range", "name must be a short string")
+    return Payload(mount.id, float(mass), size, offset, name)
+
+
+def _parse_vec3(
+    data: object, name: str, low: float, high: float, positive: bool = False
+) -> tuple[float, float, float]:
+    if not isinstance(data, list) or len(data) != 3:
+        raise RobotError("out_of_range", f"{name} must be three numbers")
+    values: list[float] = []
+    for item in data:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            raise RobotError("out_of_range", f"{name} must be three numbers")
+        number = float(item)
+        if not math.isfinite(number) or number < low or number > high or (positive and number <= 0):
+            raise RobotError("out_of_range", f"{name} must be from {low:g} to {high:g}")
+        values.append(number)
+    return (values[0], values[1], values[2])
 
 
 def device_id_of(body: dict[str, Any]) -> str:

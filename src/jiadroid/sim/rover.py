@@ -1,9 +1,16 @@
-"""A two-wheel rover, the second body.
+"""The first prototype: a 2WD chassis with the phone standing on top.
 
-This is the shape of a robot vacuum or a classroom robot: two drive
-motors, two wheel encoders, a bump switch, and a forward range sensor.
-It has no legs and no head, so it announces only `motion.velocity`, and
-the phone's Follow Me decision still drives it.
+The base is the DIYables 2WD robot car chassis, Amazon ASIN B0H4V8TR38
+(model DIY-2WD-RC-ROBOT-CAR-AND-MOTOR-DRIVER): two DC gear motors with
+encoders, an L9110S driver (0.8 A per channel, 2.5–12 V), a caster, and
+a 4×AA holder. The listing weighs the kit at 11.3 oz (0.32 kg) and does
+not publish a drawing. Wheel diameter, track, and plate height below are
+the usual figures for this chassis; measure them on the real plate.
+
+The phone stands on the top acrylic, screen facing forward, so the front
+camera looks along +x. Lying flat would point that camera at the ceiling.
+It has no head, so it announces only `motion.velocity`, and the phone's
+Follow Me decision still drives it.
 
 The kinematics are a differential drive on a flat floor. A wall stands
 across the floor at `WALL_X` so the range sensor and the bump switch have
@@ -15,21 +22,39 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from jiadroid.protocol.messages import Controls, Device
+from jiadroid.protocol.messages import Controls, Device, Mount
 from jiadroid.sim.body import Body
 
-ROBOT_ID = "rover"
-ROBOT_NAME = "Rover"
+ROBOT_ID = "2wd-chassis"
+ROBOT_NAME = "2WD Chassis"
+# Listed kit weight, including the driver and the battery holder, not the cells.
+CHASSIS_MASS_KG = 0.32
 
-WHEEL_RADIUS_M = 0.035
-WHEEL_BASE_M = 0.24
-TICKS_PER_REV = 360
-MAX_WHEEL_RAD_S = 15.0
-MAX_FORWARD_M_S = 0.5
-MAX_YAW_RAD_S = 2.0
+# 65 mm tires, the usual wheel for this kit.
+WHEEL_RADIUS_M = 0.0325
+# Distance between the two wheel centers. Approximate.
+WHEEL_BASE_M = 0.15
+# The encoder disk is on the motor shaft. 20 slots is typical and the
+# gearbox is 1:48, so one wheel turn is 960 ticks. Count the slots on the
+# real motor before trusting this.
+ENCODER_SLOTS = 20
+GEAR_RATIO = 48
+TICKS_PER_REV = ENCODER_SLOTS * GEAR_RATIO
+# What we ask of it with a phone on top, under the L9110S. A free motor at
+# 6 V is faster than this.
+MAX_FORWARD_M_S = 0.40
+MAX_YAW_RAD_S = 1.5
+MAX_WHEEL_RAD_S = MAX_FORWARD_M_S / WHEEL_RADIUS_M
 WALL_X = 3.0
-BODY_RADIUS_M = 0.17
+# Nose of the plate ahead of the rear axle, for the range sensor.
+NOSE_M = 0.16
 RANGE_MAX_M = 2.0
+# Top acrylic, about 20 mm above the axle. A 155 mm phone standing on it
+# has its center 77.5 mm above the plate. The axle is near the back, so
+# the middle of the plate is ahead of the origin.
+PLATE_ABOVE_AXLE_M = 0.020
+PHONE_CENTER_ABOVE_PLATE_M = 0.0775
+PLATE_CENTER_X_M = 0.06
 
 ROVER_CONTROLS: Controls = {
     "motion.velocity": {
@@ -37,6 +62,18 @@ ROVER_CONTROLS: Controls = {
         "yaw": (-MAX_YAW_RAD_S, MAX_YAW_RAD_S),
     },
 }
+
+# Body frame: x forward, y left, z up, origin at the axle center.
+# `top` is a phone standing on the top plate, screen forward. 0.30 kg
+# covers a large phone. The chassis itself is only 0.32 kg, so the phone
+# is about half the robot.
+ROVER_MOUNTS = (
+    Mount(
+        "top",
+        (PLATE_CENTER_X_M, 0.0, PLATE_ABOVE_AXLE_M + PHONE_CENTER_ABOVE_PLATE_M),
+        0.30,
+    ),
+)
 
 ROVER_DEVICES = (
     Device("motor", "left_wheel", ("velocity",)),
@@ -54,7 +91,7 @@ class RoverBody(Body):
     kind = "wheeled"
 
     def __init__(self) -> None:
-        super().__init__(ROVER_DEVICES, ROVER_CONTROLS)
+        super().__init__(ROVER_DEVICES, ROVER_CONTROLS, ROVER_MOUNTS)
         self._wheel = {"left_wheel": 0.0, "right_wheel": 0.0}  # rad/s
         self._angle = {"left_wheel": 0.0, "right_wheel": 0.0}  # rad, accumulated
         self._x = 0.0
@@ -98,10 +135,10 @@ class RoverBody(Body):
         self._x += forward * math.cos(self._heading) * dt
         self._y += forward * math.sin(self._heading) * dt
         self._heading = (self._heading + yaw * dt + math.pi) % (2 * math.pi) - math.pi
-        if self._x + BODY_RADIUS_M >= WALL_X:
-            self._x = WALL_X - BODY_RADIUS_M
+        if self._x + NOSE_M >= WALL_X:
+            self._x = WALL_X - NOSE_M
             self._bumped = True
-        elif self._bumped and self._x + BODY_RADIUS_M < WALL_X - 0.01:
+        elif self._bumped and self._x + NOSE_M < WALL_X - 0.01:
             self._bumped = False
 
     def _moving_locked(self) -> bool:
@@ -142,7 +179,7 @@ class RoverBody(Body):
         facing = math.cos(self._heading)
         if facing <= 1e-6:
             return RANGE_MAX_M
-        distance = (WALL_X - self._x - BODY_RADIUS_M) / facing
+        distance = (WALL_X - self._x - NOSE_M) / facing
         return max(0.0, min(RANGE_MAX_M, distance))
 
 

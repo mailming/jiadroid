@@ -52,6 +52,9 @@ IMU_SITE = "imu"
 FEET_SITES = ("left_foot", "right_foot")
 FEET_GEOMS = ("left_foot_bottom_tpu", "right_foot_bottom_tpu")
 FLOOR_GEOM = "floor"
+# Mount id -> body fixed to that link. A phone there moves with the link.
+PHONE_BODIES = {"head": "phone_head", "back": "phone_back"}
+_EMPTY_PHONE_MASS = 1e-4
 
 
 def _require_mujoco() -> "mujoco":
@@ -176,7 +179,19 @@ class DuckPhysics:
         self._feet_geoms = np.array([self.model.geom(name).id for name in FEET_GEOMS])
         self._feet_sites = np.array([self.model.site(name).id for name in FEET_SITES])
         self._root_body = self.model.body(ROOT_BODY).id
+        self._phone_ids = {name: int(self.model.body(body).id) for name, body in PHONE_BODIES.items()}
+        self._phone_geoms = {name: int(self.model.geom(body).id) for name, body in PHONE_BODIES.items()}
         self.reset()
+        trunk = self._root_body
+        self._trunk_home_pos = self.data.xpos[trunk].copy()
+        self._trunk_home_rot = self.data.xmat[trunk].reshape(3, 3).copy()
+        self._phone_parent_home: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name, body_id in self._phone_ids.items():
+            parent = int(self.model.body_parentid[body_id])
+            self._phone_parent_home[name] = (
+                self.data.xpos[parent].copy(),
+                self.data.xmat[parent].reshape(3, 3).copy(),
+            )
 
     # ---- state ------------------------------------------------------------------
 
@@ -287,6 +302,60 @@ class DuckPhysics:
 
     def set_base_velocity(self, qvel6: np.ndarray) -> None:
         self.data.qvel[self._base_qvel : self._base_qvel + 6] = qvel6
+
+    def set_phone(self, mount: str, position: np.ndarray, size: np.ndarray, mass: float) -> None:
+        """Hang a box on `mount`. `position` is its center in the trunk frame at the standing pose.
+
+        The box is a child of that mount's link, so a head phone pitches with the head.
+        `size` is the full extents in meters, x forward, y left, z up.
+        """
+        self.clear_phone()
+        body_id = self._phone_ids[mount]
+        parent_pos, parent_rot = self._phone_parent_home[mount]
+        world = self._trunk_home_pos + self._trunk_home_rot @ np.asarray(position, dtype=np.float64)
+        local = parent_rot.T @ (world - parent_pos)
+        self.model.body_pos[body_id] = local
+        self.model.body_mass[body_id] = mass
+        half = np.asarray(size, dtype=np.float64) / 2
+        # Diagonal inertia of a solid box about its center, in the body frame.
+        self.model.body_inertia[body_id] = mass * np.array(
+            [
+                (half[1] ** 2 + half[2] ** 2) / 3,
+                (half[0] ** 2 + half[2] ** 2) / 3,
+                (half[0] ** 2 + half[1] ** 2) / 3,
+            ]
+        )
+        geom = self._phone_geoms[mount]
+        self.model.geom_size[geom] = half
+        self.model.geom_rgba[geom, 3] = 0.9
+        self._recompute_constants()
+
+    def clear_phone(self) -> None:
+        for body_id in self._phone_ids.values():
+            self.model.body_mass[body_id] = _EMPTY_PHONE_MASS
+            self.model.body_inertia[body_id] = 1e-8
+        for geom in self._phone_geoms.values():
+            self.model.geom_size[geom] = 0.001
+            self.model.geom_rgba[geom, 3] = 0.0
+        self._recompute_constants()
+
+    def _recompute_constants(self) -> None:
+        # mj_setConst writes qpos0 into qpos. Keep the pose the duck already has.
+        qpos = self.data.qpos.copy()
+        qvel = self.data.qvel.copy()
+        act = self.data.act.copy()
+        ctrl = self.data.ctrl.copy()
+        time = float(self.data.time)
+        self._mujoco.mj_setConst(self.model, self.data)
+        self.data.qpos[:] = qpos
+        self.data.qvel[:] = qvel
+        self.data.act[:] = act
+        self.data.ctrl[:] = ctrl
+        self.data.time = time
+        self._mujoco.mj_forward(self.model, self.data)
+
+    def phone_mass(self, mount: str) -> float:
+        return float(self.model.body_mass[self._phone_ids[mount]])
 
     # ---- helpers ----------------------------------------------------------------
 

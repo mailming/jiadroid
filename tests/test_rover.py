@@ -8,7 +8,7 @@ import pytest
 from jiadroid import RobotError, connect
 from jiadroid.follow import decide, fit_to_robot, observe
 from jiadroid.sim.controller import SimulatorServer
-from jiadroid.sim.rover import WALL_X, RoverBody
+from jiadroid.sim.rover import MAX_FORWARD_M_S, WALL_X, RoverBody
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def robot(server):
 
 
 def test_rover_announces_wheels_not_legs(robot) -> None:
-    assert robot.name == "Rover"
+    assert robot.name == "2WD Chassis"
     assert robot.kind == "wheeled"
     assert robot.supports("motion.velocity")
     assert not robot.supports("head.pose")
@@ -89,13 +89,13 @@ def test_individual_motor_and_range_sensor(robot) -> None:
 
 def test_rover_body_bumps_into_the_wall() -> None:
     body = RoverBody()
-    body.dispatch("motion.velocity", {"forward": 0.5})
-    for _ in range(int(WALL_X / 0.5 / 0.02) + 50):
+    body.dispatch("motion.velocity", {"forward": MAX_FORWARD_M_S})
+    for _ in range(int(WALL_X / MAX_FORWARD_M_S / 0.02) + 50):
         body.integrate(0.02)
     sample = body.snapshot()
     assert sample["sensors"]["bump"] == 1.0
     assert sample["sensors"]["range_front"] == pytest.approx(0.0)
-    body.dispatch("motion.velocity", {"forward": -0.5})
+    body.dispatch("motion.velocity", {"forward": -MAX_FORWARD_M_S})
     for _ in range(10):
         body.integrate(0.02)
     assert body.snapshot()["sensors"]["bump"] == 0.0

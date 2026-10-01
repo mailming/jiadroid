@@ -39,7 +39,8 @@ def test_zero_action_stands_with_zero_command() -> None:
 
 
 def test_episode_truncates_and_terminates() -> None:
-    env = DuckJoystickEnv(DuckEnvConfig(episode_length=20, fixed_command=(0,) * 7).clean())
+    # No phone: a phone on the back can hold this flail up, and the point here is the fall.
+    env = DuckJoystickEnv(DuckEnvConfig(episode_length=20, fixed_command=(0,) * 7, carry_phone=False).clean())
     env.reset(seed=0)
     truncated = False
     for _ in range(20):
@@ -62,6 +63,9 @@ def test_reset_is_seeded_and_commands_are_sampled() -> None:
     obs_b, info_b = env.reset(seed=7)
     assert obs_a == pytest.approx(obs_b)
     assert info_a["command"] == pytest.approx(info_b["command"])
+    assert info_a["phone_mass"] == info_b["phone_mass"]
+    assert info_a["phone_mass"] > 0
+    assert info_a["phone_mount"] in ("head", "back")
     _obs, info_c = env.reset(seed=8)
     assert info_c["command"] != pytest.approx(info_a["command"])
     env.set_command([0.1, 0, 0, 0, 0, 0, 0])
