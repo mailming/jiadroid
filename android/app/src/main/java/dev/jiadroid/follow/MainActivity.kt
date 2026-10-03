@@ -141,8 +141,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val prefs = getPreferences(MODE_PRIVATE)
-        binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, ""))
-        binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, ""))
+        binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, DEFAULT_BRAIN_URL))
+        binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, DEFAULT_BRAIN_MODEL))
         binding.brainKey.setText(prefs.getString(PREF_BRAIN_KEY, ""))
         binding.brainUse.setOnClickListener { useBrain(save = true) }
         useBrain(save = false)
@@ -647,5 +647,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_BRAIN_URL = "brain_url"
         private const val PREF_BRAIN_MODEL = "brain_model"
         private const val PREF_BRAIN_KEY = "brain_key"
+        private const val DEFAULT_BRAIN_URL = "https://api.anthropic.com/v1"
+        private const val DEFAULT_BRAIN_MODEL = "claude-haiku-4-5"
     }
 }

@@ -21,7 +21,7 @@
     <string name="talk_empty">What you say and what it answers shows here.</string>
     <string name="say_hint">Type what you would say</string>
     <string name="say">Say</string>
-    <string name="brain_url_hint">Model URL, e.g. http://10.0.2.2:11434/v1</string>
+    <string name="brain_url_hint">Model URL, e.g. https://api.anthropic.com/v1</string>
     <string name="brain_model_hint">Model</string>
     <string name="brain_key_hint">API key</string>
     <string name="brain_use">Use</string>

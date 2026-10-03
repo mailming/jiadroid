@@ -164,6 +164,21 @@ python -m jiadroid.sim --host 0.0.0.0 --robot duck-physics --policy runs/duck_pp
 
 The phone and the laptop need to be on the same Wi-Fi. The simulator prints the address to enter. The app shows which body it connected to and drives whichever one answers.
 
+### Pixel 8 Pro and robot motion sensors
+
+The current Android test phone is a Google Pixel 8 Pro. Its bare-phone payload
+profile (213 g, 76.5 x 162.6 x 8.8 mm) is already included in the Android app,
+iOS app, Python library, and protocol documentation. Cases and clamps add to
+the reported payload mass.
+
+Android Activity Recognition is intended for human walking, running, cycling,
+and vehicle travel, so it is not useful as robot odometry. A future Jiadroid
+IMU integration should read the game rotation vector, gyroscope, and linear
+acceleration directly with `SensorManager`, transform readings from the
+landscape-mounted phone into the robot body frame, and fuse them with encoders
+or another position source. See [Android phone IMU](docs/android-imu.md) for the
+Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
+
 ## What exists today
 
 - A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, its parts, and where a phone can be mounted. The phone sends commands scaled to those limits, and reports its own weight, size, and which mount it is on. The robot reports what it is doing.
