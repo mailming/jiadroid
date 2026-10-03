@@ -26,6 +26,7 @@ class VoiceSession(
     private val onLine: (String) -> Unit,
     private val onTurn: (who: String, text: String) -> Unit,
     private val onHearing: (String) -> Unit,
+    private val onAction: (VoiceAction) -> Unit,
 ) {
     /** When null, replies come from the phone's own short list. */
     @Volatile var brain: Brain? = null
@@ -216,6 +217,10 @@ class VoiceSession(
         if (speaking) return
         if (isNoise(heard)) return
         onTurn("You", heard)
+        parseVoiceAction(heard)?.let { action ->
+            onAction(action)
+            onTurn("Action", action.description)
+        }
         speaking = true
         val seen = seeing()
         val brain = brain

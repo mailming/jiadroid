@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var voice: VoiceSession
     private val talk = ArrayDeque<String>()
     private var hearing: String? = null
+    private var voiceDecision: FollowDecision? = null
+    private var voiceActionUntil = 0L
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -130,6 +132,7 @@ class MainActivity : AppCompatActivity() {
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
+            onAction = ::applyVoiceAction,
         )
         binding.saySend.setOnClickListener { sayTyped() }
         binding.say.setOnEditorActionListener { _, actionId, _ ->
@@ -194,13 +197,46 @@ class MainActivity : AppCompatActivity() {
             markerCorners = null
             binding.overlay.setMarker(null, 0, 0, "")
         }
-        val decision = decide(scene, subject)
+        val decision = currentDecision(decide(scene, subject))
         if (decision.command == "STOP") gait = 0f else gait += dt * 7f
         stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
         binding.eyes.render(decision, if (scene.visible) gazeY else 0f)
         show(decision, scene)
         send(decision, force = false)
+    }
+
+    /**
+     * A spoken move runs briefly and then latches STOP. "Follow me" explicitly
+     * hands control back to the camera follower.
+     */
+    private fun applyVoiceAction(action: VoiceAction) {
+        if (action.motion == VoiceMotion.FOLLOW) {
+            voiceDecision = null
+            voiceActionUntil = 0L
+        } else {
+            voiceDecision = action.decision()
+            voiceActionUntil = if (action.durationMs > 0L) {
+                SystemClock.elapsedRealtime() + action.durationMs
+            } else {
+                Long.MAX_VALUE
+            }
+        }
+        lastCommandKey = null
+    }
+
+    private fun currentDecision(follow: FollowDecision): FollowDecision {
+        val manual = voiceDecision ?: return follow
+        if (voiceActionUntil != Long.MAX_VALUE &&
+            SystemClock.elapsedRealtime() >= voiceActionUntil
+        ) {
+            val stopped = VoiceAction(VoiceMotion.STOP).decision()
+            voiceDecision = stopped
+            voiceActionUntil = Long.MAX_VALUE
+            lastCommandKey = null
+            return stopped
+        }
+        return manual
     }
 
     private fun logTurn(who: String, text: String) {
