@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.util.Log
 import com.hoho.android.usbserial.driver.CdcAcmSerialDriver
 import com.hoho.android.usbserial.driver.ProbeTable
 import com.hoho.android.usbserial.driver.UsbSerialPort
@@ -22,13 +23,14 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Opens an Espressif ESP32-S3 USB CDC / Serial-JTAG port and exposes it as streams
- * for [RobotClient]. Requires USB host (OTG) on the phone.
+ * Opens an Espressif ESP32-S3 USB CDC port for [RobotClient].
  *
- * Important: start reading immediately after open. The board may send session.hello
- * during the settle delay; dropping those bytes makes Connect fail.
+ * Opening the port often USB-resets the ESP32-S3 (LED blinks). We deliberately
+ * open once to trigger that reset, wait for re-enumeration, then open again and
+ * read session.hello while the firmware is stably repeating it.
  */
 object UsbRobotLink {
+    private const val TAG = "UsbRobotLink"
     private const val ACTION_USB_PERMISSION = "dev.jiadroid.follow.USB_PERMISSION"
     private const val ESPRESSIF_VID = 0x303A
     private const val BAUD = 115200
@@ -36,14 +38,79 @@ object UsbRobotLink {
     fun connect(context: Context): RobotClient {
         val app = context.applicationContext
         val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
+        ensurePermission(app, usb)
+
+        // First open often resets the chip. Close and wait so the real session
+        // is not torn down mid-hello.
+        bouncePort(usb)
+
+        var lastError: Exception? = null
+        repeat(5) { attempt ->
+            try {
+                ensurePermission(app, usb)
+                return openStable(usb)
+            } catch (error: Exception) {
+                lastError = error
+                Log.i(TAG, "USB connect attempt ${attempt + 1} failed: ${error.message}")
+                Thread.sleep(1200L + attempt * 400L)
+            }
+        }
+        throw IllegalStateException(
+            lastError?.message
+                ?: "USB connect failed. Use a data OTG cable into the board USB port, not UART/COM.",
+        )
+    }
+
+    private fun bouncePort(usb: UsbManager) {
+        try {
+            val driver = findDriver(usb) ?: return
+            val connection = usb.openDevice(driver.device) ?: return
+            val port = driver.ports.firstOrNull() ?: run {
+                connection.close()
+                return
+            }
+            try {
+                port.open(connection)
+                port.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+                // Leave both inactive — avoids download mode and limits extra resets.
+                port.rts = false
+                port.dtr = false
+                Thread.sleep(150)
+            } finally {
+                try {
+                    port.close()
+                } catch (_: Exception) {
+                }
+                try {
+                    connection.close()
+                } catch (_: Exception) {
+                }
+            }
+        } catch (error: Exception) {
+            Log.i(TAG, "USB bounce skipped: ${error.message}")
+        }
+        // Allow reboot + re-enumerate before the real open.
+        Thread.sleep(2800)
+        waitForEspressif(usb, 8000)
+    }
+
+    private fun waitForEspressif(usb: UsbManager, timeoutMs: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (findDriver(usb) != null) return
+            Thread.sleep(200)
+        }
+    }
+
+    private fun openStable(usb: UsbManager): RobotClient {
         val driver = findDriver(usb)
-            ?: throw IllegalStateException("No ESP32 on USB. Use a USB-C OTG cable into the board USB port (not UART/COM).")
+            ?: throw IllegalStateException("No ESP32 on USB. Plug OTG into the board USB port.")
         val device = driver.device
         if (!usb.hasPermission(device)) {
-            requestPermission(app, usb, device)
+            throw IllegalStateException("USB permission denied")
         }
         val connection = usb.openDevice(device)
-            ?: throw IllegalStateException("Can't open the USB device. Check OTG permission.")
+            ?: throw IllegalStateException("Can't open the USB device")
         val port = driver.ports.firstOrNull()
             ?: run {
                 connection.close()
@@ -58,14 +125,8 @@ object UsbRobotLink {
         try {
             port.open(connection)
             port.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            // Avoid download-mode straps; DTR high helps some CDC stacks mark the host present.
-            try {
-                port.rts = false
-                port.dtr = false
-                Thread.sleep(50)
-                port.dtr = true
-            } catch (_: Exception) {
-            }
+            port.rts = false
+            port.dtr = true
 
             io = SerialInputOutputManager(port, object : SerialInputOutputManager.Listener {
                 override fun onNewData(data: ByteArray) {
@@ -78,6 +139,7 @@ object UsbRobotLink {
                 }
 
                 override fun onRunError(e: Exception?) {
+                    Log.i(TAG, "USB IO error: ${e?.message}")
                     alive.set(false)
                     try {
                         pipeOut.close()
@@ -85,9 +147,9 @@ object UsbRobotLink {
                     }
                 }
             })
-            // Start listening BEFORE waiting — firmware may already be repeating hello.
+            // Catch hello bytes immediately — firmware repeats them until we speak.
             io.start()
-            Thread.sleep(2000)
+            Thread.sleep(500)
         } catch (error: Exception) {
             alive.set(false)
             io?.stop()
@@ -103,6 +165,7 @@ object UsbRobotLink {
             throw IllegalStateException(error.message ?: "USB serial open failed")
         }
 
+        val manager = io
         val usbOut = object : OutputStream() {
             override fun write(b: Int) {
                 port.write(byteArrayOf(b.toByte()), 2000)
@@ -116,7 +179,6 @@ object UsbRobotLink {
             override fun close() {}
         }
 
-        val manager = io
         return try {
             RobotClient.open(pipeIn, usbOut) {
                 alive.set(false)
@@ -169,6 +231,17 @@ object UsbRobotLink {
         return null
     }
 
+    private fun ensurePermission(context: Context, usb: UsbManager) {
+        val driver = findDriver(usb)
+            ?: throw IllegalStateException("No ESP32 on USB. Use a data OTG cable into the USB port.")
+        val device = driver.device
+        if (usb.hasPermission(device)) return
+        requestPermission(context, usb, device)
+        if (!usb.hasPermission(device)) {
+            throw IllegalStateException("USB permission denied")
+        }
+    }
+
     private fun requestPermission(context: Context, usb: UsbManager, device: UsbDevice) {
         val latch = CountDownLatch(1)
         val receiver = object : BroadcastReceiver() {
@@ -192,13 +265,10 @@ object UsbRobotLink {
         }
         val intent = PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), flags)
         usb.requestPermission(device, intent)
-        val granted = latch.await(20, TimeUnit.SECONDS) && usb.hasPermission(device)
+        latch.await(20, TimeUnit.SECONDS)
         try {
             context.unregisterReceiver(receiver)
         } catch (_: Exception) {
-        }
-        if (!granted) {
-            throw IllegalStateException("USB permission denied")
         }
     }
 }

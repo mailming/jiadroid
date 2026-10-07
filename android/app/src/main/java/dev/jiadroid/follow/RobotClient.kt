@@ -127,18 +127,18 @@ class RobotClient private constructor(
 
     private fun awaitHello(timeoutMs: Long) {
         val message = hello.poll(timeoutMs, TimeUnit.MILLISECONDS)
-            ?: throw IllegalStateException("Simulator did not say hello")
+            ?: throw IllegalStateException("Robot did not say hello over this link")
         if (message.optString("kind") != "evt") {
-            throw IllegalStateException("Simulator connection closed")
+            throw IllegalStateException("Robot connection closed before hello")
         }
         val body = message.optJSONObject("body")
-            ?: throw IllegalStateException("Simulator hello was empty")
+            ?: throw IllegalStateException("Robot hello was empty")
         val version = body.optString("version")
         if (body.optString("protocol") != "jiadroid" || version !in SUPPORTED_VERSIONS) {
             throw IllegalStateException("Not a Jiadroid robot")
         }
         val robot = body.optJSONObject("robot")
-            ?: throw IllegalStateException("Simulator hello was empty")
+            ?: throw IllegalStateException("Robot hello was empty")
         name = robot.optString("name").ifEmpty { "Robot" }
         kind = robot.optString("kind").ifEmpty { if (version == "0.1") "biped" else "other" }
         safety = body.optJSONObject("safety")?.optString("state")?.ifEmpty { "ready" } ?: "ready"
@@ -266,7 +266,7 @@ class RobotClient private constructor(
             val client = RobotClient(input, output, onClose)
             try {
                 client.start()
-                client.awaitHello(12000)
+                client.awaitHello(15000)
                 client.declarePhone()
             } catch (error: Exception) {
                 client.close()
