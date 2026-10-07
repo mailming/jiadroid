@@ -1,11 +1,24 @@
 #include "protocol.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "chassis.h"
 #include "config.h"
+
+static void logCmd(const char *op) {
+    Serial.print("cmd ");
+    Serial.println(op);
+}
+
+static void logMotion(const char *op, double forward, double yaw) {
+    char line[96];
+    snprintf(line, sizeof(line), "cmd %s forward=%.3f yaw=%.3f", op, forward, yaw);
+    Serial.println(line);
+}
 
 static const char *safety = "ready";
 static double motionForward = 0;
@@ -472,6 +485,9 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
     const char *code = "unsupported";
 
     if (strcmp(op, "session.ping") == 0 || strcmp(op, "session.bye") == 0) {
+        if (strcmp(op, "session.bye") == 0) {
+            logCmd(op);
+        }
         resultBody["ok"] = true;
         if (!succeed(client, "res", op, id, result)) {
             return false;
@@ -479,6 +495,7 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         return strcmp(op, "session.bye") != 0;
     }
     if (strcmp(op, "devices.list") == 0) {
+        logCmd(op);
         fillDevices(resultBody["devices"].to<JsonArray>());
         return succeed(client, "res", op, id, result);
     }
@@ -502,6 +519,7 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         motionForward = forward;
         motionYaw = yaw;
         commandWheels(forward, yaw);
+        logMotion(op, forward, yaw);
         resultBody["forward"] = forward;
         resultBody["yaw"] = yaw;
         addSafety(resultBody);
@@ -530,6 +548,11 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
             applyWheels(chassisLeft(), velocity);
         }
         motionFromWheels();
+        {
+            char line[96];
+            snprintf(line, sizeof(line), "cmd %s %s=%.3f", op, deviceId, velocity);
+            Serial.println(line);
+        }
         resultBody["id"] = deviceId;
         resultBody["velocity"] = velocity;
         addSafety(resultBody);
@@ -568,11 +591,13 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         return succeed(client, "res", op, id, result);
     }
     if (strcmp(op, "robot.stop") == 0) {
+        logCmd(op);
         stopMotion();
         addSafety(resultBody);
         return succeed(client, "res", op, id, result);
     }
     if (strcmp(op, "robot.reset") == 0) {
+        logCmd(op);
         stopMotion();
         chassisZeroEncoders();
         chassisZeroPose();
@@ -599,12 +624,14 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         return succeed(client, "res", op, id, result);
     }
     if (strcmp(op, "safety.estop") == 0) {
+        logCmd(op);
         stopMotion();
         safety = "estop";
         addSafety(resultBody);
         return succeed(client, "res", op, id, result);
     }
     if (strcmp(op, "safety.clear") == 0) {
+        logCmd(op);
         if (strcmp(safety, "estop") == 0) {
             safety = "ready";
         }
