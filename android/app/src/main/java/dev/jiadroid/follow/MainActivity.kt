@@ -118,6 +118,9 @@ class MainActivity : AppCompatActivity() {
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
         }
+        binding.connectUsb.setOnClickListener {
+            if (link.get() != null) disconnect() else connectOverUsb()
+        }
         binding.host.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 connectToLaptop()
@@ -367,34 +370,67 @@ class MainActivity : AppCompatActivity() {
         }
         hideKeyboard()
         connecting = true
-        binding.connect.isEnabled = false
+        setLinkButtonsEnabled(false)
         binding.link.text = getString(R.string.connecting)
         val (host, port) = endpoint
         io.execute {
             try {
                 val robot = RobotClient.connect(host, port)
                 handler.post {
-                    connecting = false
-                    binding.connect.isEnabled = true
-                    link.set(robot)
-                    lastCommandKey = null
-                    binding.connect.text = getString(R.string.disconnect)
-                    binding.link.text = getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port)
+                    onLinked(robot, getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port))
                 }
             } catch (error: Exception) {
                 handler.post {
                     connecting = false
-                    binding.connect.isEnabled = true
+                    setLinkButtonsEnabled(true)
                     binding.link.text = error.message ?: getString(R.string.need_address)
                 }
             }
         }
     }
 
+    private fun connectOverUsb() {
+        if (connecting || link.get() != null) return
+        hideKeyboard()
+        connecting = true
+        setLinkButtonsEnabled(false)
+        binding.link.text = getString(R.string.connecting)
+        io.execute {
+            try {
+                val robot = UsbRobotLink.connect(this)
+                handler.post {
+                    onLinked(robot, getString(R.string.connected_usb, robot.name, robot.kind, robot.deviceCount))
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    connecting = false
+                    setLinkButtonsEnabled(true)
+                    binding.link.text = error.message ?: getString(R.string.need_usb)
+                }
+            }
+        }
+    }
+
+    private fun onLinked(robot: RobotClient, status: String) {
+        connecting = false
+        setLinkButtonsEnabled(true)
+        link.set(robot)
+        lastCommandKey = null
+        binding.connect.text = getString(R.string.disconnect)
+        binding.connectUsb.text = getString(R.string.disconnect)
+        binding.link.text = status
+    }
+
+    private fun setLinkButtonsEnabled(enabled: Boolean) {
+        binding.connect.isEnabled = enabled
+        binding.connectUsb.isEnabled = enabled
+    }
+
     private fun disconnect() {
         val robot = link.getAndSet(null)
         lastCommandKey = null
         binding.connect.text = getString(R.string.connect)
+        binding.connectUsb.text = getString(R.string.connect_usb)
         binding.link.text = getString(R.string.link_idle)
         if (robot != null) release(robot)
     }
@@ -413,9 +449,10 @@ class MainActivity : AppCompatActivity() {
         if (!link.compareAndSet(robot, null)) return
         lastCommandKey = null
         binding.connect.text = getString(R.string.connect)
+        binding.connectUsb.text = getString(R.string.connect_usb)
         binding.link.text = error.message ?: getString(R.string.link_idle)
         release(robot)
-        Log.i(TAG, "simulator link closed", error)
+        Log.i(TAG, "robot link closed", error)
     }
 
     private fun parseEndpoint(text: String): Pair<String, Int>? {

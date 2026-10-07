@@ -5,11 +5,14 @@
     <string name="subtitle">Point the front camera at a person or the mini person.</string>
     <string name="lost">Nothing to follow</string>
     <string name="stop">STOP</string>
-    <string name="host_hint">Laptop address, optional</string>
+    <string name="host_hint">Wi‑Fi host:port, or leave blank for USB</string>
     <string name="connect">Connect</string>
+    <string name="connect_usb">USB</string>
     <string name="disconnect">Disconnect</string>
     <string name="connecting">Connecting…</string>
     <string name="connected">Sending commands to %1$s (%2$s) · %3$d devices at %4$s:%5$d</string>
+    <string name="connected_usb">Sending commands to %1$s (%2$s) · %3$d devices over USB‑C</string>
+    <string name="need_usb">Plug the ESP32 USB port into the phone with a USB‑C OTG cable, then tap USB.</string>
     <string name="code_width">QR code</string>
     <string name="person_height">Person height</string>
     <string name="millimeters">mm</string>
@@ -28,7 +31,7 @@
     <string name="brain_local">Replies come from the phone. Add a model URL for real conversation.</string>
     <string name="brain_on">Replies come from %1$s at %2$s.</string>
     <string name="link_idle">Not connected. The duck above still follows what the camera sees.</string>
-    <string name="need_address">Enter the laptop address, or use the phone simulator alone.</string>
+    <string name="need_address">Enter a Wi‑Fi address, tap USB for the cable, or use the phone simulator alone.</string>
     <string name="sim_description">Simulated duck following the marker</string>
     <string name="camera_denied">Camera permission is required to see who to follow.</string>
     <string name="no_front_camera">This phone has no front camera.</string>

@@ -2,16 +2,18 @@
 
 How to put the Jiadroid protocol on the ESP32 that drives the first prototype.
 
-The phone is still the brain. The ESP32 only moves the chassis, counts the wheels, and stops when asked. It speaks [protocol 0.2](protocol.md) over Wi-Fi, on TCP port 8765, the same port as the laptop simulator. The phone app connects to it the same way it connects to `python -m jiadroid.sim --robot rover`.
+The phone is still the brain. The ESP32 only moves the chassis, counts the wheels, and stops when asked. On this branch it speaks [protocol 0.2](protocol.md) primarily over **USB‑C serial** (phone OTG powers the board and carries the same newline‑JSON messages). Optional Wi‑Fi TCP on port 8765 remains as a fallback when `WIFI_SSID` is set.
 
-The project lives in `firmware/`. It is a [PlatformIO](https://platformio.org/) project for the [ESP32-S3-DevKitC-1](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1.html). Flash and serial use that board's own **USB** connector (native USB CDC / USB Serial-JTAG), not the **UART** connector. On macOS it shows up as an Espressif device, typically USB ID `303A:1001`, on a path like `/dev/cu.usbmodem1101`. A classic ESP32-WROOM-32 DevKit cannot appear that way: it has no USB of its own.
+The project lives in `firmware/`. It is a [PlatformIO](https://platformio.org/) project for the [ESP32-S3-DevKitC-1](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1.html). The connector labeled **USB** is native USB CDC (protocol + phone power). The connector labeled **UART/COM** is for laptop debug logs only. On macOS the USB port shows up as Espressif `303A:1001`, path like `/dev/cu.usbmodem1101`.
 
 ## What you need
 
 - The ESP32-S3-DevKitC-1. Use the connector labeled USB, the one wired to the chip, not the one labeled UART.
 - A data USB cable. A charge-only cable powers the board and still fails to flash it.
 - The [DIYables 2WD chassis](https://www.amazon.com/dp/B0H4V8TR38): two encoder motors, an L9110S driver, a caster, and the top plate.
-- Four AA cells for the motors. The ESP32 itself is powered from USB while you program it.
+- Four AA cells for the motors (L9110S). They are separate from the ESP32 supply.
+- For the USB MVP: a USB‑C OTG cable from an **Android** phone into the board **USB** port (phone powers the ESP32 and talks to it). A laptop USB cable is only for flashing.
+- Optional: a 5 V powerbank on USB/COM if you are not using the phone for power.
 
 PlatformIO compiles the firmware and flashes it. Install the PlatformIO IDE extension in Cursor, or install the command-line tool:
 
@@ -105,17 +107,22 @@ If upload cannot sync on a blank or stubborn board, hold **BOOT**, tap **RESET**
 
 From Cursor with the PlatformIO extension, open `firmware/`, then use Upload and Monitor on the `esp32-s3-devkitc-1` environment. That runs the same two commands; still point them at the port from `pio device list`.
 
-## Talk to it
+## Talk to it (USB‑C MVP)
 
-The laptop client works before the phone app does. Use the address from the monitor:
+1. Flash from a laptop on the **USB** port, then unplug the laptop.
+2. Plug that same **USB** port into an Android phone with a USB‑C OTG cable (phone powers the ESP32).
+3. Put AA cells in for the motors; share GND between ESP32 and L9110S; wire GPIO 4–7 as above.
+4. Build/install the Android app from this branch. In Debug, tap **USB**. Allow USB permission. You should see `2WD Chassis` over USB‑C.
+
+Debug logs (including `cmd motion.velocity …`) print on the **UART/COM** port at 115200, not on the USB protocol link. Leave COM unplugged during a phone demo unless you want a laptop log.
+
+### Optional Wi‑Fi fallback
+
+Set `WIFI_SSID` / `WIFI_PASSWORD` in `config.h`, flash, and watch COM for `Listening on …:8765`. In the app, enter that address and tap **Connect** (not USB). iPhone can use Wi‑Fi only; USB serial is Android on this branch.
 
 ```bash
 python -c "from jiadroid import connect; robot = connect('tcp://192.168.1.50:8765'); print(robot.kind, robot.name); robot.move(forward=0.1); robot.stop(); robot.close()"
 ```
-
-The wheels should turn, then stop. `robot.kind` is `wheeled` and the name is `2WD Chassis`.
-
-In the Android or iOS app, enter that same address and tap Connect, the same as for the laptop simulator. The app shows which body answered and sends Follow Me as `motion.velocity`.
 
 One phone at a time. A second connection is refused while the first is open.
 
@@ -135,6 +142,7 @@ The bump switch cuts the part of the command that would drive into it. The phone
 
 ## What it does not do
 
-- Bluetooth and USB. Those are other ways to carry the same messages. This firmware is Wi-Fi only.
+- iPhone over USB. Apple does not allow casual USB‑serial to this DevKit; use Wi‑Fi for iPhone.
+- Bluetooth. Not implemented on this branch.
 - The Open Duck Mini. The duck's ESP32 link, the one that would write `motion.velocity` into the walk policy, is still unwritten.
 - A proven bring-up on the real plate. The project compiles here. Wheel direction, encoder direction, and the measured size of the plate still have to be checked on the hardware, then set in `config.h`.

@@ -3,7 +3,9 @@ package dev.jiadroid.follow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.InputStream
 import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -18,14 +20,19 @@ class RobotException(val code: String, message: String) : Exception(message)
 data class Limit(val low: Double, val high: Double)
 
 /**
- * TCP client for protocol 0.2 (and 0.1 robots). Each message is one JSON object and a newline.
+ * Stream client for protocol 0.2 (and 0.1 robots) over TCP or USB serial.
+ * Each message is one JSON object and a newline.
  *
  * On connect the robot says what it is and which robot-level commands it accepts, with
  * limits. `walk` then sends the Follow Me decision as `motion.velocity`, rescaled to the
  * robot's limits, plus `head.pose` if the robot has a head. A 0.1 duck still gets the
  * old `walk.velocity`.
  */
-class RobotClient private constructor(private val socket: Socket) {
+class RobotClient private constructor(
+    private val input: InputStream,
+    private val output: OutputStream,
+    private val onClose: () -> Unit = {},
+) {
     var name: String = ""
         private set
     var kind: String = "other"
@@ -99,7 +106,15 @@ class RobotClient private constructor(private val socket: Socket) {
         } catch (_: Exception) {
         }
         try {
-            socket.close()
+            input.close()
+        } catch (_: Exception) {
+        }
+        try {
+            output.close()
+        } catch (_: Exception) {
+        }
+        try {
+            onClose()
         } catch (_: Exception) {
         }
         thread.join(1000)
@@ -197,14 +212,14 @@ class RobotClient private constructor(private val socket: Socket) {
     private fun write(message: JSONObject) {
         val bytes = (message.toString() + "\n").toByteArray(Charsets.UTF_8)
         synchronized(writeLock) {
-            socket.getOutputStream().write(bytes)
-            socket.getOutputStream().flush()
+            output.write(bytes)
+            output.flush()
         }
     }
 
     private fun readLoop() {
         try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+            val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8))
             while (!closed.get()) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) continue
@@ -239,10 +254,19 @@ class RobotClient private constructor(private val socket: Socket) {
                 socket.close()
                 throw IllegalStateException("Can't reach $host:$port")
             }
-            val client = RobotClient(socket)
+            return open(socket.getInputStream(), socket.getOutputStream()) {
+                try {
+                    socket.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        fun open(input: InputStream, output: OutputStream, onClose: () -> Unit = {}): RobotClient {
+            val client = RobotClient(input, output, onClose)
             try {
                 client.start()
-                client.awaitHello(5000)
+                client.awaitHello(8000)
                 client.declarePhone()
             } catch (error: Exception) {
                 client.close()

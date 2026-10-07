@@ -211,6 +211,13 @@
                 android:textColorHint="@color/muted" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect_usb"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/connect_usb" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/connect"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

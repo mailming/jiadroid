@@ -9,15 +9,29 @@
 #include "chassis.h"
 #include "config.h"
 
+static Stream *logStream = nullptr;
+
+void protocolSetLogStream(Stream *stream) {
+    logStream = stream;
+}
+
+static void logLine(const char *line) {
+    if (logStream == nullptr) {
+        return;
+    }
+    logStream->println(line);
+}
+
 static void logCmd(const char *op) {
-    Serial.print("cmd ");
-    Serial.println(op);
+    char line[64];
+    snprintf(line, sizeof(line), "cmd %s", op);
+    logLine(line);
 }
 
 static void logMotion(const char *op, double forward, double yaw) {
     char line[96];
     snprintf(line, sizeof(line), "cmd %s forward=%.3f yaw=%.3f", op, forward, yaw);
-    Serial.println(line);
+    logLine(line);
 }
 
 static const char *safety = "ready";
@@ -36,7 +50,7 @@ static char payloadName[65] = "";
 
 static char errorMessage[96];
 
-static bool sendDocument(WiFiClient &client, JsonDocument &doc) {
+static bool sendDocument(Stream &peer, JsonDocument &doc) {
     static char out[3072];
     size_t need = measureJson(doc);
     if (need + 1 >= sizeof(out)) {
@@ -44,7 +58,7 @@ static bool sendDocument(WiFiClient &client, JsonDocument &doc) {
     }
     size_t written = serializeJson(doc, out, sizeof(out));
     out[written++] = '\n';
-    return client.write(reinterpret_cast<const uint8_t *>(out), written) == written;
+    return peer.write(reinterpret_cast<const uint8_t *>(out), written) == written;
 }
 
 static void addSafety(JsonObject body) {
@@ -345,7 +359,7 @@ static void fillSample(JsonObject body) {
     base["yaw"] = yaw;
 }
 
-static bool sendResult(WiFiClient &client, const char *kind, const char *op, const char *id, JsonDocument &body, bool failed) {
+static bool sendResult(Stream &peer, const char *kind, const char *op, const char *id, JsonDocument &body, bool failed) {
     JsonDocument doc;
     doc["v"] = 1;
     doc["kind"] = kind;
@@ -360,18 +374,18 @@ static bool sendResult(WiFiClient &client, const char *kind, const char *op, con
     } else {
         doc["body"] = body.as<JsonObject>();
     }
-    return sendDocument(client, doc);
+    return sendDocument(peer, doc);
 }
 
-static bool fail(WiFiClient &client, const char *op, const char *id, const char *code) {
+static bool fail(Stream &peer, const char *op, const char *id, const char *code) {
     JsonDocument body;
     body["code"] = code;
     body["message"] = errorMessage;
-    return sendResult(client, "res", op, id, body, true);
+    return sendResult(peer, "res", op, id, body, true);
 }
 
-static bool succeed(WiFiClient &client, const char *kind, const char *op, const char *id, JsonDocument &body) {
-    return sendResult(client, kind, op, id, body, false);
+static bool succeed(Stream &peer, const char *kind, const char *op, const char *id, JsonDocument &body) {
+    return sendResult(peer, kind, op, id, body, false);
 }
 
 void protocolResetSession() {
@@ -379,10 +393,10 @@ void protocolResetSession() {
     telemetryHz = 10;
 }
 
-bool protocolSendHello(WiFiClient &client) {
+bool protocolSendHello(Stream &peer) {
     JsonDocument body;
     fillHello(body.to<JsonObject>());
-    return succeed(client, "evt", "session.hello", nullptr, body);
+    return succeed(peer, "evt", "session.hello", nullptr, body);
 }
 
 void protocolOnDisconnect() {
@@ -390,7 +404,7 @@ void protocolOnDisconnect() {
     stopMotion();
 }
 
-bool protocolPollTelemetry(WiFiClient &client, unsigned long nowMs) {
+bool protocolPollTelemetry(Stream &peer, unsigned long nowMs) {
     if (!telemetryOn) {
         return true;
     }
@@ -404,7 +418,7 @@ bool protocolPollTelemetry(WiFiClient &client, unsigned long nowMs) {
     telemetryDueMs = nowMs + period;
     JsonDocument body;
     fillSample(body.to<JsonObject>());
-    if (!succeed(client, "evt", "telemetry.sample", nullptr, body)) {
+    if (!succeed(peer, "evt", "telemetry.sample", nullptr, body)) {
         protocolOnDisconnect();
         return false;
     }
@@ -468,7 +482,7 @@ static const char *payloadErrorCode() {
     return strstr(errorMessage, "no mount") != nullptr ? "unknown_device" : "out_of_range";
 }
 
-bool protocolHandleLine(WiFiClient &client, const char *line) {
+bool protocolHandleLine(Stream &peer, const char *line) {
     JsonDocument req;
     if (deserializeJson(req, line) != DeserializationError::Ok || !envelopeOk(req)) {
         return false;
@@ -489,7 +503,7 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
             logCmd(op);
         }
         resultBody["ok"] = true;
-        if (!succeed(client, "res", op, id, result)) {
+        if (!succeed(peer, "res", op, id, result)) {
             return false;
         }
         return strcmp(op, "session.bye") != 0;
@@ -497,24 +511,24 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
     if (strcmp(op, "devices.list") == 0) {
         logCmd(op);
         fillDevices(resultBody["devices"].to<JsonArray>());
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "motion.velocity") == 0) {
         double forward = 0;
         double yaw = 0;
         if (!readNumber(body["forward"], "forward", -MAX_FORWARD_M_S, MAX_FORWARD_M_S, true, &forward) ||
             !readNumber(body["yaw"], "yaw", -MAX_YAW_RAD_S, MAX_YAW_RAD_S, true, &yaw)) {
-            return fail(client, op, id, "out_of_range");
+            return fail(peer, op, id, "out_of_range");
         }
         if (!body["lateral"].isNull()) {
             if (body["lateral"].is<bool>() || !body["lateral"].is<float>() || !isfinite(body["lateral"].as<double>()) ||
                 fabs(body["lateral"].as<double>()) > 1e-9) {
                 snprintf(errorMessage, sizeof(errorMessage), "lateral is not supported by this robot");
-                return fail(client, op, id, "out_of_range");
+                return fail(peer, op, id, "out_of_range");
             }
         }
         if (latched(&code)) {
-            return fail(client, op, id, code);
+            return fail(peer, op, id, code);
         }
         motionForward = forward;
         motionYaw = yaw;
@@ -523,24 +537,24 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         resultBody["forward"] = forward;
         resultBody["yaw"] = yaw;
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "head.pose") == 0 || strcmp(op, "walk.velocity") == 0 || strcmp(op, "servo.position") == 0 ||
         strcmp(op, "servo.read") == 0) {
         snprintf(errorMessage, sizeof(errorMessage), "2WD Chassis does not accept %s", op);
-        return fail(client, op, id, "unsupported");
+        return fail(peer, op, id, "unsupported");
     }
     if (strcmp(op, "motor.velocity") == 0) {
         const char *deviceId = nullptr;
         if (!requireDevice(body, "motor", &deviceId, nullptr)) {
-            return fail(client, op, id, deviceErrorCode(errorMessage));
+            return fail(peer, op, id, deviceErrorCode(errorMessage));
         }
         if (latched(&code)) {
-            return fail(client, op, id, code);
+            return fail(peer, op, id, code);
         }
         double velocity = 0;
         if (!readNumber(body["velocity"], "velocity", -MAX_WHEEL_RAD_S, MAX_WHEEL_RAD_S, false, &velocity)) {
-            return fail(client, op, id, "out_of_range");
+            return fail(peer, op, id, "out_of_range");
         }
         if (strcmp(deviceId, "left_wheel") == 0) {
             applyWheels(velocity, chassisRight());
@@ -551,50 +565,50 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         {
             char line[96];
             snprintf(line, sizeof(line), "cmd %s %s=%.3f", op, deviceId, velocity);
-            Serial.println(line);
+            logLine(line);
         }
         resultBody["id"] = deviceId;
         resultBody["velocity"] = velocity;
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "encoder.read") == 0) {
         const char *deviceId = nullptr;
         if (!requireDevice(body, "encoder", &deviceId, nullptr)) {
-            return fail(client, op, id, deviceErrorCode(errorMessage));
+            return fail(peer, op, id, deviceErrorCode(errorMessage));
         }
         resultBody["id"] = deviceId;
         resultBody["ticks"] = strcmp(deviceId, "left_wheel") == 0 ? chassisLeftTicks() : chassisRightTicks();
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "sensor.read") == 0) {
         const char *deviceId = nullptr;
         const char *unit = nullptr;
         if (!requireDevice(body, "sensor", &deviceId, &unit)) {
-            return fail(client, op, id, deviceErrorCode(errorMessage));
+            return fail(peer, op, id, deviceErrorCode(errorMessage));
         }
         resultBody["id"] = deviceId;
         resultBody["value"] = strcmp(deviceId, "bump") == 0 ? (chassisBump() ? 1.0 : 0.0) : chassisRange();
         resultBody["unit"] = unit;
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "payload.set") == 0) {
         if (!setPayload(body)) {
-            return fail(client, op, id, payloadErrorCode());
+            return fail(peer, op, id, payloadErrorCode());
         }
         fillPayload(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "payload.clear") == 0) {
         payloadOn = false;
         resultBody["cleared"] = true;
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "robot.stop") == 0) {
         logCmd(op);
         stopMotion();
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "robot.reset") == 0) {
         logCmd(op);
@@ -602,33 +616,33 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
         chassisZeroEncoders();
         chassisZeroPose();
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "telemetry.subscribe") == 0) {
         double hz = 10;
         if (!body["hz"].isNull()) {
             if (body["hz"].is<bool>() || !body["hz"].is<float>()) {
                 snprintf(errorMessage, sizeof(errorMessage), "telemetry hz must be greater than 0 and at most 50");
-                return fail(client, op, id, "out_of_range");
+                return fail(peer, op, id, "out_of_range");
             }
             hz = body["hz"].as<double>();
             if (!isfinite(hz) || hz <= 0 || hz > 50) {
                 snprintf(errorMessage, sizeof(errorMessage), "telemetry hz must be greater than 0 and at most 50");
-                return fail(client, op, id, "out_of_range");
+                return fail(peer, op, id, "out_of_range");
             }
         }
         telemetryHz = hz;
         telemetryOn = true;
         telemetryDueMs = millis();
         resultBody["hz"] = hz;
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "safety.estop") == 0) {
         logCmd(op);
         stopMotion();
         safety = "estop";
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     if (strcmp(op, "safety.clear") == 0) {
         logCmd(op);
@@ -636,8 +650,8 @@ bool protocolHandleLine(WiFiClient &client, const char *line) {
             safety = "ready";
         }
         addSafety(resultBody);
-        return succeed(client, "res", op, id, result);
+        return succeed(peer, "res", op, id, result);
     }
     snprintf(errorMessage, sizeof(errorMessage), "unknown operation %s", op);
-    return fail(client, op, id, "unsupported");
+    return fail(peer, op, id, "unsupported");
 }
