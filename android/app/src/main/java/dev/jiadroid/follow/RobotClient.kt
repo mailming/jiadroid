@@ -266,7 +266,7 @@ class RobotClient private constructor(
             val client = RobotClient(input, output, onClose)
             try {
                 client.start()
-                client.awaitHello(8000)
+                client.awaitHello(12000)
                 client.declarePhone()
             } catch (error: Exception) {
                 client.close()

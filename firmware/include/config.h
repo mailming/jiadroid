@@ -50,3 +50,6 @@ constexpr int PIN_BUMP = 21;
 // Optional HC-SR04. Leave both at -1 and range_front stays at RANGE_MAX_M.
 constexpr int PIN_RANGE_TRIG = -1;
 constexpr int PIN_RANGE_ECHO = -1;
+
+// Onboard WS2812 RGB: GPIO 38 on DevKitC-1 v1.1, GPIO 48 on v1.0. Set -1 to disable.
+constexpr int PIN_STATUS_RGB = 38;

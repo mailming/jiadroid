@@ -107,6 +107,23 @@ If upload cannot sync on a blank or stubborn board, hold **BOOT**, tap **RESET**
 
 From Cursor with the PlatformIO extension, open `firmware/`, then use Upload and Monitor on the `esp32-s3-devkitc-1` environment. That runs the same two commands; still point them at the port from `pio device list`.
 
+## Status RGB LED
+
+The DevKitC‑1 onboard WS2812 (GPIO **38** on v1.1, set `PIN_STATUS_RGB` in `config.h`; use **48** on v1.0) shows link and command state:
+
+| LED | Meaning |
+| --- | --- |
+| Slow blue blink | Joining Wi‑Fi |
+| Dim blue | Wi‑Fi up, waiting for a phone |
+| Dim green | Phone linked, idle |
+| Green / cyan / magenta pulse | `motion.velocity` (forward / turn left / mix) |
+| Reddish pulse | Reverse motion |
+| White flash | `robot.stop` / reset |
+| Fast red blink | `safety.estop` |
+| Green flash | `safety.clear` |
+| Purple flash | `session.bye` |
+| Slow red blink | Wi‑Fi failed / skipped |
+
 ## Talk to it (USB‑C MVP)
 
 1. Flash from a laptop on the **USB** port, then unplug the laptop.

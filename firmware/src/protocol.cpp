@@ -8,18 +8,27 @@
 
 #include "chassis.h"
 #include "config.h"
+#include "status_led.h"
 
 static Stream *logStream = nullptr;
+static bool usbLogMirror = false;
 
 void protocolSetLogStream(Stream *stream) {
     logStream = stream;
 }
 
+void protocolSetUsbLogMirror(bool enabled) {
+    usbLogMirror = enabled;
+}
+
 static void logLine(const char *line) {
-    if (logStream == nullptr) {
-        return;
+    if (logStream != nullptr) {
+        logStream->println(line);
     }
-    logStream->println(line);
+    // Mirror to USB CDC so `pio device monitor` on the USB port shows cmds.
+    if (usbLogMirror) {
+        Serial.println(line);
+    }
 }
 
 static void logCmd(const char *op) {
@@ -501,6 +510,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
     if (strcmp(op, "session.ping") == 0 || strcmp(op, "session.bye") == 0) {
         if (strcmp(op, "session.bye") == 0) {
             logCmd(op);
+            statusLedSet(STATUS_LED_BYE);
         }
         resultBody["ok"] = true;
         if (!succeed(peer, "res", op, id, result)) {
@@ -534,6 +544,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
         motionYaw = yaw;
         commandWheels(forward, yaw);
         logMotion(op, forward, yaw);
+        statusLedMotion(forward, yaw);
         resultBody["forward"] = forward;
         resultBody["yaw"] = yaw;
         addSafety(resultBody);
@@ -607,6 +618,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
     if (strcmp(op, "robot.stop") == 0) {
         logCmd(op);
         stopMotion();
+        statusLedSet(STATUS_LED_STOP);
         addSafety(resultBody);
         return succeed(peer, "res", op, id, result);
     }
@@ -615,6 +627,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
         stopMotion();
         chassisZeroEncoders();
         chassisZeroPose();
+        statusLedSet(STATUS_LED_STOP);
         addSafety(resultBody);
         return succeed(peer, "res", op, id, result);
     }
@@ -641,6 +654,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
         logCmd(op);
         stopMotion();
         safety = "estop";
+        statusLedSet(STATUS_LED_ESTOP);
         addSafety(resultBody);
         return succeed(peer, "res", op, id, result);
     }
@@ -649,6 +663,7 @@ bool protocolHandleLine(Stream &peer, const char *line) {
         if (strcmp(safety, "estop") == 0) {
             safety = "ready";
         }
+        statusLedSet(STATUS_LED_CLEAR);
         addSafety(resultBody);
         return succeed(peer, "res", op, id, result);
     }

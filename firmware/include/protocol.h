@@ -11,3 +11,5 @@ void protocolOnDisconnect();
 
 // Debug lines go here. Use UART0 (COM port) when USB CDC carries the protocol.
 void protocolSetLogStream(Stream *stream);
+// Also print cmd logs on USB Serial (the usual monitor port) when Wi-Fi is the phone link.
+void protocolSetUsbLogMirror(bool enabled);

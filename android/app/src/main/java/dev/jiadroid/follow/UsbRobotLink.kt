@@ -14,7 +14,6 @@ import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import java.io.IOException
-import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
@@ -25,6 +24,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Opens an Espressif ESP32-S3 USB CDC / Serial-JTAG port and exposes it as streams
  * for [RobotClient]. Requires USB host (OTG) on the phone.
+ *
+ * Important: start reading immediately after open. The board may send session.hello
+ * during the settle delay; dropping those bytes makes Connect fail.
  */
 object UsbRobotLink {
     private const val ACTION_USB_PERMISSION = "dev.jiadroid.follow.USB_PERMISSION"
@@ -34,7 +36,8 @@ object UsbRobotLink {
     fun connect(context: Context): RobotClient {
         val app = context.applicationContext
         val usb = app.getSystemService(Context.USB_SERVICE) as UsbManager
-        val driver = findDriver(usb) ?: throw IllegalStateException("No ESP32 on USB. Use a USB-C OTG cable into the board USB port.")
+        val driver = findDriver(usb)
+            ?: throw IllegalStateException("No ESP32 on USB. Use a USB-C OTG cable into the board USB port (not UART/COM).")
         val device = driver.device
         if (!usb.hasPermission(device)) {
             requestPermission(app, usb, device)
@@ -46,62 +49,78 @@ object UsbRobotLink {
                 connection.close()
                 throw IllegalStateException("USB device has no serial port")
             }
+
+        val pipeOut = PipedOutputStream()
+        val pipeIn = PipedInputStream(pipeOut, 64 * 1024)
+        val alive = AtomicBoolean(true)
+        var io: SerialInputOutputManager? = null
+
         try {
             port.open(connection)
             port.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            // Keep RTS low so the ESP32-S3 is not held in download mode.
-            port.dtr = true
-            port.rts = false
-            Thread.sleep(1200)
+            // Avoid download-mode straps; DTR high helps some CDC stacks mark the host present.
+            try {
+                port.rts = false
+                port.dtr = false
+                Thread.sleep(50)
+                port.dtr = true
+            } catch (_: Exception) {
+            }
+
+            io = SerialInputOutputManager(port, object : SerialInputOutputManager.Listener {
+                override fun onNewData(data: ByteArray) {
+                    if (!alive.get()) return
+                    try {
+                        pipeOut.write(data)
+                        pipeOut.flush()
+                    } catch (_: IOException) {
+                    }
+                }
+
+                override fun onRunError(e: Exception?) {
+                    alive.set(false)
+                    try {
+                        pipeOut.close()
+                    } catch (_: Exception) {
+                    }
+                }
+            })
+            // Start listening BEFORE waiting — firmware may already be repeating hello.
+            io.start()
+            Thread.sleep(2000)
         } catch (error: Exception) {
+            alive.set(false)
+            io?.stop()
             try {
                 port.close()
             } catch (_: Exception) {
             }
             connection.close()
+            try {
+                pipeOut.close()
+            } catch (_: Exception) {
+            }
             throw IllegalStateException(error.message ?: "USB serial open failed")
         }
 
-        val pipeOut = PipedOutputStream()
-        val pipeIn = PipedInputStream(pipeOut, 16 * 1024)
-        val alive = AtomicBoolean(true)
-        val io = SerialInputOutputManager(port, object : SerialInputOutputManager.Listener {
-            override fun onNewData(data: ByteArray) {
-                if (!alive.get()) return
-                try {
-                    pipeOut.write(data)
-                    pipeOut.flush()
-                } catch (_: IOException) {
-                }
-            }
-
-            override fun onRunError(e: Exception?) {
-                alive.set(false)
-                try {
-                    pipeOut.close()
-                } catch (_: Exception) {
-                }
-            }
-        })
-        io.start()
-
         val usbOut = object : OutputStream() {
             override fun write(b: Int) {
-                port.write(byteArrayOf(b.toByte()), 1000)
+                port.write(byteArrayOf(b.toByte()), 2000)
             }
 
             override fun write(b: ByteArray, off: Int, len: Int) {
                 val chunk = if (off == 0 && len == b.size) b else b.copyOfRange(off, off + len)
-                port.write(chunk, 1000)
+                port.write(chunk, 2000)
             }
 
             override fun close() {}
         }
 
+        val manager = io
         return try {
             RobotClient.open(pipeIn, usbOut) {
                 alive.set(false)
-                io.stop()
+                manager?.stop()
                 try {
                     port.dtr = false
                 } catch (_: Exception) {
@@ -125,7 +144,7 @@ object UsbRobotLink {
             }
         } catch (error: Exception) {
             alive.set(false)
-            io.stop()
+            manager?.stop()
             try {
                 port.close()
             } catch (_: Exception) {
@@ -144,7 +163,8 @@ object UsbRobotLink {
         val defaultProber = UsbSerialProber.getDefaultProber()
         for (device in usb.deviceList.values) {
             if (device.vendorId != ESPRESSIF_VID) continue
-            return prober.probeDevice(device) ?: defaultProber.probeDevice(device)
+            val found = prober.probeDevice(device) ?: defaultProber.probeDevice(device)
+            if (found != null) return found
         }
         return null
     }

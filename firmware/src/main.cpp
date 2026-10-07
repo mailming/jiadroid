@@ -3,16 +3,22 @@
 #include "chassis.h"
 #include "config.h"
 #include "protocol.h"
+#include "status_led.h"
 
-// USB CDC (Serial) carries the protocol for the phone. UART0 (Serial0) is the
-// COM port on the DevKit — use that for debug logs so they do not corrupt USB.
+// USB CDC (Serial) is the phone protocol link (OTG). UART0 (Serial0) is debug.
+// Optional Wi-Fi is a fallback when USB is free.
 static WiFiServer server(ROBOT_PORT);
 static WiFiClient wifiClient;
 static Stream *peer = nullptr;
 static bool peerIsWifi = false;
 static bool wifiServerStarted = false;
+static bool wifiStarted = false;
 static bool usbSession = false;
 static bool usbHostWas = false;
+static bool usbAwaitingClient = false;
+static unsigned long usbHostGoneMs = 0;
+static unsigned long nextUsbHelloMs = 0;
+static unsigned long nextWifiAttemptMs = 0;
 static char line[8192];
 static size_t lineLength = 0;
 
@@ -33,8 +39,15 @@ static void dropPeer(const char *reason) {
     peer = nullptr;
     peerIsWifi = false;
     usbSession = false;
+    usbAwaitingClient = false;
     lineLength = 0;
     protocolOnDisconnect();
+    protocolSetUsbLogMirror(false);
+    if (WiFi.status() == WL_CONNECTED) {
+        statusLedSet(STATUS_LED_WIFI_OK);
+    } else {
+        statusLedSet(STATUS_LED_WIFI_WAIT);
+    }
 }
 
 static bool beginPeer(Stream *stream, bool wifi, const char *label) {
@@ -44,43 +57,64 @@ static bool beginPeer(Stream *stream, bool wifi, const char *label) {
     peer = stream;
     peerIsWifi = wifi;
     usbSession = !wifi;
+    usbAwaitingClient = !wifi;
     lineLength = 0;
     protocolResetSession();
+    protocolSetUsbLogMirror(wifi);
     if (!protocolSendHello(*peer)) {
         dropPeer("Failed to send session.hello.");
         return false;
     }
+    nextUsbHelloMs = millis() + 800;
+    statusLedSet(STATUS_LED_IDLE);
     logMsg(label);
     return true;
 }
 
-static void joinWifi() {
+static void startWifiNonBlocking() {
     if (WIFI_SSID[0] == '\0' || strcmp(WIFI_SSID, "your-network") == 0) {
-        logMsg("Wi-Fi skipped (set WIFI_SSID in include/config.h to enable).");
         return;
     }
+    if (wifiStarted) {
+        return;
+    }
+    wifiStarted = true;
+    statusLedSet(STATUS_LED_WIFI_WAIT);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial0.print("Joining ");
     Serial0.println(WIFI_SSID);
-    for (int attempt = 0; attempt < 40 && WiFi.status() != WL_CONNECTED; attempt++) {
-        delay(500);
-        Serial0.print(".");
+}
+
+static void pollWifi(unsigned long nowMs) {
+    if (WIFI_SSID[0] == '\0' || strcmp(WIFI_SSID, "your-network") == 0) {
+        return;
     }
-    Serial0.println();
+    if (!wifiStarted) {
+        startWifiNonBlocking();
+        return;
+    }
     if (WiFi.status() != WL_CONNECTED) {
-        logMsg("Wi-Fi join failed.");
+        if (nowMs > nextWifiAttemptMs) {
+            nextWifiAttemptMs = nowMs + 5000;
+            WiFi.disconnect(false);
+            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            logMsg("Wi-Fi retry…");
+        }
         return;
     }
     if (!wifiServerStarted) {
         server.begin();
         wifiServerStarted = true;
+        Serial0.print("Listening on ");
+        Serial0.print(WiFi.localIP());
+        Serial0.print(":");
+        Serial0.println(ROBOT_PORT);
+        if (peer == nullptr) {
+            statusLedSet(STATUS_LED_WIFI_OK);
+        }
     }
-    Serial0.print("Listening on ");
-    Serial0.print(WiFi.localIP());
-    Serial0.print(":");
-    Serial0.println(ROBOT_PORT);
 }
 
 static void acceptWifi() {
@@ -100,21 +134,34 @@ static void acceptWifi() {
     beginPeer(&wifiClient, true, "Phone connected over Wi-Fi.");
 }
 
-static void pollUsbSession() {
-    // HWCDC's operator bool is true while a USB host has the CDC port open.
+static void pollUsbSession(unsigned long nowMs) {
     bool host = static_cast<bool>(Serial) || Serial.available() > 0;
+
     if (peer != nullptr && usbSession) {
-        if (usbHostWas && !host) {
-            dropPeer("Phone disconnected (USB).");
+        if (!host) {
+            if (usbHostGoneMs == 0) {
+                usbHostGoneMs = nowMs;
+            } else if (nowMs - usbHostGoneMs > 1000) {
+                dropPeer("Phone disconnected (USB).");
+                usbHostGoneMs = 0;
+            }
+        } else {
+            usbHostGoneMs = 0;
+            // Keep advertising hello until the phone app opens and speaks.
+            if (usbAwaitingClient && (long)(nowMs - nextUsbHelloMs) >= 0) {
+                protocolSendHello(*peer);
+                nextUsbHelloMs = nowMs + 800;
+            }
         }
         usbHostWas = host;
         return;
     }
-    if (peer != nullptr) {
-        usbHostWas = host;
-        return;
+
+    // USB phone wins over Wi-Fi when the cable/host appears.
+    if (host && peer != nullptr && peerIsWifi && !usbHostWas) {
+        dropPeer("Yielding Wi-Fi to USB phone.");
     }
-    if (host) {
+    if (host && peer == nullptr) {
         beginPeer(&Serial, false, "Phone connected over USB.");
     }
     usbHostWas = host;
@@ -142,9 +189,16 @@ static void readPeer(unsigned long nowMs) {
             lineLength--;
         }
         line[lineLength] = '\0';
-        if (lineLength == 0 || !protocolHandleLine(*peer, line)) {
-            dropPeer(lineLength == 0 ? "Closing an empty message." : "Phone disconnected.");
+        if (lineLength == 0) {
+            // Ignore blank lines (phone/OS can send them on open).
+            continue;
+        }
+        if (!protocolHandleLine(*peer, line)) {
+            dropPeer("Phone disconnected.");
             return;
+        }
+        if (usbSession) {
+            usbAwaitingClient = false;
         }
         lineLength = 0;
     }
@@ -160,34 +214,29 @@ static void readPeer(unsigned long nowMs) {
 void setup() {
     Serial.begin(115200);
     Serial0.begin(115200);
-    delay(200);
+    delay(300);
     protocolSetLogStream(&Serial0);
-    Serial0.println("Jiadroid 2WD chassis (USB-C + optional Wi-Fi)");
-    Serial0.println("Protocol on USB. Debug on UART/COM.");
+    protocolSetUsbLogMirror(false);
+    statusLedBegin();
+    logMsg("Jiadroid 2WD chassis (USB-C primary)");
+    logMsg("Plug phone OTG into the USB port, then tap USB in the app.");
     chassisBegin();
-    joinWifi();
+
+    // Prefer USB immediately — do not block on Wi-Fi first.
+    if (static_cast<bool>(Serial) || Serial.available() > 0) {
+        beginPeer(&Serial, false, "Phone connected over USB.");
+        usbHostWas = true;
+    }
+    startWifiNonBlocking();
 }
 
 void loop() {
     unsigned long nowMs = millis();
-    pollUsbSession();
-    if (WiFi.status() == WL_CONNECTED) {
+    statusLedPoll(nowMs);
+    pollUsbSession(nowMs);
+    pollWifi(nowMs);
+    if (peer == nullptr) {
         acceptWifi();
-    } else if (peerIsWifi && peer != nullptr) {
-        dropPeer("Wi-Fi dropped.");
-        static unsigned long retryMs = 0;
-        if (nowMs - retryMs > 5000) {
-            retryMs = nowMs;
-            joinWifi();
-        }
-    } else {
-        static unsigned long retryMs = 0;
-        if (WIFI_SSID[0] != '\0' && strcmp(WIFI_SSID, "your-network") != 0 && nowMs - retryMs > 5000) {
-            retryMs = nowMs;
-            if (WiFi.status() != WL_CONNECTED) {
-                joinWifi();
-            }
-        }
     }
     if (peer != nullptr) {
         readPeer(nowMs);
