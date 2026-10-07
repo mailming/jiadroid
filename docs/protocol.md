@@ -298,6 +298,8 @@ Failed responses use `error.code`:
 
 Any of them accepts the same Follow Me command from the Android and iOS apps and from `python -m jiadroid.demo`.
 
+The ESP32 program in [`firmware/`](../firmware/) is this same chassis on real hardware. It listens on TCP port 8765 and announces the same body. How to flash it is in [firmware.md](firmware.md).
+
 ## Client shape
 
 ```python

@@ -184,6 +184,7 @@ Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
 - A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, its parts, and where a phone can be mounted. The phone sends commands scaled to those limits, and reports its own weight, size, and which mount it is on. The robot reports what it is doing.
 - Safety built into the language. A stop command halts motion, an emergency stop blocks all movement until someone clears it, and a reset puts a simulated robot back on its feet.
 - Three simulated bodies behind that one language: a kinematic Open Duck Mini, a two-wheel rover, and an Open Duck Mini in MuJoCo physics.
+- ESP32-S3 firmware for the 2WD chassis. It speaks this language over Wi-Fi, drives the L9110S from `motion.velocity`, and counts the wheel encoders. See [docs/firmware.md](docs/firmware.md).
 - A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
 - Follow Me logic that decides where the robot should go, and rescales that decision to any body.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
@@ -194,8 +195,8 @@ Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
 - A trained walker that walks well. The training environment and script are here, and a few million steps produce a duck that stands and shuffles. Walking as well as the Open Duck project's policies needs longer training and its imitation reward, which relies on reference motions this repository does not ship. See [docs/training.md](docs/training.md).
 - Telling people apart. With several people in view, the phone follows whichever one the pose detector picks.
 - ESP32 firmware that speaks this language and drives a real body. A dock that mounts the phone on the duck, and a connection from that ESP32 to a real Open Duck Mini, so the phone's `motion.velocity` is written into `RLWalk.last_commands` in place of the game controller.
-- Bluetooth and USB connections. The phone reaches the simulators over the network.
-- Firmware for the 2WD chassis. The simulator already speaks for it. What is missing is ESP32 code that drives the L9110S from `motion.velocity` and counts the motor encoders, with the phone standing on the top plate.
+- Bluetooth and USB connections. The phone reaches the simulators, and the chassis firmware, over Wi-Fi.
+- A measured 2WD chassis. The wheel track, plate height, and encoder slot count in the simulator and the firmware are the usual ones for this kit, and should be checked on the real plate.
 
 ## Where this goes
 
@@ -205,4 +206,4 @@ The larger goal is: "My phone can give intelligence to any compatible machine."
 
 After Follow Me, the same phone could add voice commands, obstacle avoidance, and navigation. The same connection could then reach grippers, arms, garden tools, or other devices, so hardware makers and app makers can build for one shared platform.
 
-The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md).
+The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md). Flashing the 2WD chassis is in [docs/firmware.md](docs/firmware.md).
