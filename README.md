@@ -206,4 +206,4 @@ The larger goal is: "My phone can give intelligence to any compatible machine."
 
 After Follow Me, the same phone could add voice commands, obstacle avoidance, and navigation. The same connection could then reach grippers, arms, garden tools, or other devices, so hardware makers and app makers can build for one shared platform.
 
-The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md). Flashing the 2WD chassis is in [docs/firmware.md](docs/firmware.md).
+The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md). Flashing the 2WD chassis is in [docs/firmware.md](docs/firmware.md). Product and platform sparks live in the [idea bank](docs/idea-bank.md) (table-edge math, ball pickers, and more).
