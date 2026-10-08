@@ -109,16 +109,16 @@ class FollowTest {
 
     @Test
     fun greetingIsSpokenBack() {
-        assertEquals(
-            "Hello. I am Lulu. I can see you, and I can hear you.",
-            reply("hello there", "Person is centered"),
-        )
+        val spoken = reply("hello there", "Person is centered")
+        assertEquals("Hello. I am Lulu. I can see you, and I can hear you.", spoken.say)
+        assertEquals(Emotion.HAPPY, spoken.emotion)
     }
 
     @Test
     fun askingWhatItSeesUsesTheCamera() {
-        assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost"))
-        assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left"))
+        assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost").say)
+        assertEquals(Emotion.CONFUSED, reply("what do you see", "Person is lost").emotion)
+        assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left").say)
     }
 
     @Test
@@ -130,7 +130,8 @@ class FollowTest {
         val only = parseAttention("Lulu", "lulu")
         assertTrue(only.addressed)
         assertEquals("", only.utterance)
-        assertEquals("Yes?", reply("", "Person is centered"))
+        assertEquals("Yes?", reply("", "Person is centered").say)
+        assertEquals(Emotion.CURIOUS, reply("", "Person is centered").emotion)
     }
 
     @Test

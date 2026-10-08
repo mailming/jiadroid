@@ -14,6 +14,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private let onLine: (String) -> Void
     private let onTurn: (String, String) -> Void
     private let onHearing: (String) -> Void
+    private let onEmotion: (Emotion) -> Void
 
     private let audioEngine = AVAudioEngine()
     private let synthesizer = AVSpeechSynthesizer()
@@ -33,12 +34,14 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         seeing: @escaping () -> String,
         onLine: @escaping (String) -> Void,
         onTurn: @escaping (String, String) -> Void,
-        onHearing: @escaping (String) -> Void
+        onHearing: @escaping (String) -> Void,
+        onEmotion: @escaping (Emotion) -> Void
     ) {
         self.seeing = seeing
         self.onLine = onLine
         self.onTurn = onTurn
         self.onHearing = onHearing
+        self.onEmotion = onEmotion
         super.init()
         synthesizer.delegate = self
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -84,7 +87,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         if attention.utterance.isEmpty {
             speaking = true
             closeMic()
-            speak("Yes?")
+            speak(SpokenReply(say: "Yes?", emotion: .curious))
             return
         }
         speaking = true
@@ -95,10 +98,11 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             speak(reply(heard: request, seeing: seen, name: name))
             return
         }
+        onEmotion(.thinking)
         onLine("Thinking")
         thinker.async { [weak self] in
             guard let self else { return }
-            let spoken: String
+            let spoken: SpokenReply
             do {
                 spoken = try brain.answer(heard: request, seeing: seen, name: name)
             } catch {
@@ -183,6 +187,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             if reportedDrop {
                 reportedDrop = false
             }
+            onEmotion(.listening)
             onLine("Listening")
             scheduleRestart()
         } catch {
@@ -208,6 +213,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                     answer(text)
                     return
                 }
+                onEmotion(.listening)
                 onHearing(text)
             }
         }
@@ -218,12 +224,13 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    private func speak(_ spoken: String) {
-        onTurn("Me", spoken)
-        onLine(spoken)
+    private func speak(_ spoken: SpokenReply) {
+        onEmotion(spoken.emotion)
+        onTurn("Me", spoken.say)
+        onLine(spoken.say)
         speakGeneration += 1
         let generation = speakGeneration
-        let utterance = AVSpeechUtterance(string: spoken)
+        let utterance = AVSpeechUtterance(string: spoken.say)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         synthesizer.speak(utterance)
@@ -238,6 +245,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         speaking = false
         speakGeneration += 1
         if !alive { return }
+        onEmotion(.listening)
         onLine("Listening")
         listen()
     }

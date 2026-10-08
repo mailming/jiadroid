@@ -49,7 +49,8 @@ final class FollowSession: ObservableObject, CameraSink {
                 seeing: { [weak self] in self?.status.situation ?? "Marker is lost" },
                 onLine: { [weak self] line in self?.voice.line = line },
                 onTurn: { [weak self] who, text in self?.logTurn(who, text) },
-                onHearing: { [weak self] text in self?.logHearing(text) }
+                onHearing: { [weak self] text in self?.logHearing(text) },
+                onEmotion: { [weak self] emotion in self?.voice.emotion = emotion }
             )
             loadBrain(save: false)
         }
@@ -552,6 +553,7 @@ final class VoiceModel: ObservableObject {
     @Published var line = "Listening"
     @Published var talkLog = "What you say and what it answers shows here."
     @Published var say = ""
+    @Published var emotion: Emotion = .listening
     @Published var robotName = defaultRobotName.capitalized
     @Published var brainURL = ""
     @Published var brainModel = ""

@@ -39,8 +39,19 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 ### Wake name / attention
 
-- **Status:** building  
+- **Status:** shipped  
 - Ignore ambient talk until someone says the robot’s name (`hey Lulu, …`). Typed Debug lines skip the gate.
+
+### Expressive eyes (medium) driven by conversation emotion
+
+- **Status:** shipped  
+- **Why:** The eyes are the face; blink/idle alone helps, but matching mood to talk makes Lulu feel alive.
+- **Idea:** Keep a tiny emotion enum for the face (`neutral`, `happy`, `curious`, `listening`, `thinking`, `confused`, `sad`, `excited`). Conversation returns **text + emotion**:
+  - Local `reply()` / wake “Yes?” → fixed mapping (greeting → happy, name-only → curious, lost person → confused).
+  - Cloud `Brain` → ask for a short JSON or trailing tag, e.g. `{"say":"…","emotion":"happy"}`, or `… <<happy>>` stripped before TTS.
+  - Voice lifecycle: hearing → `listening`, model wait → `thinking`, speaking → hold reply emotion, then ease back to follow/idle.
+- **Eyes play:** blink, brow/lid shape, pupil scale, cheek tint — still Canvas/SwiftUI, driven by `lookX`/`lookY` + emotion state.
+- **Hard parts:** model format must be strict (fallback `neutral` on parse fail); don’t let emotion tags leak into speech; keep one shared emotion vocabulary on Android and iOS.
 
 ### Voice-command robot butler
 

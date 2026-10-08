@@ -149,6 +149,7 @@ class MainActivity : AppCompatActivity() {
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
+            onEmotion = { binding.eyes.setEmotion(it) },
             onAction = ::applyVoiceAction,
         )
         binding.saySend.setOnClickListener { sayTyped() }

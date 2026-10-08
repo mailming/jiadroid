@@ -13,7 +13,7 @@ class Brain(private val baseUrl: String, private val model: String, private val 
     private val history = ArrayDeque<JSONObject>()
 
     /** Blocks on the network. Call it off the main thread. */
-    fun answer(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): String {
+    fun answer(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): SpokenReply {
         val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
         val messages = JSONArray()
         messages.put(message("system", personality(who) + "\nRight now your camera says: $seeing."))
@@ -38,12 +38,13 @@ class Brain(private val baseUrl: String, private val model: String, private val 
             val text = (if (code in 200..299) connection.inputStream else connection.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code !in 200..299) throw IllegalStateException("model replied $code ${text.take(160)}")
-            val spoken = JSONObject(text)
+            val raw = JSONObject(text)
                 .getJSONArray("choices").getJSONObject(0)
                 .getJSONObject("message").getString("content")
                 .trim()
+            val spoken = parseSpokenReply(raw)
             remember(message("user", heard))
-            remember(message("assistant", spoken))
+            remember(message("assistant", spoken.say))
             return spoken
         } finally {
             connection.disconnect()
@@ -65,8 +66,11 @@ class Brain(private val baseUrl: String, private val model: String, private val 
                 "People get your attention by saying your name first. " +
                 "You follow the person in front of you. You are warm, curious, and playfully funny, " +
                 "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
-                "sentences, with no lists, markdown, or emoji. The app separately executes clear commands " +
-                "to stop, follow, move forward or backward, and turn left or right; acknowledge such a " +
-                "request briefly, but never claim that you performed any other physical action."
+                "sentences, with no lists, markdown, or emoji. End every reply with exactly one emotion tag " +
+                "from this set: <<neutral>> <<happy>> <<curious>> <<confused>> <<sad>> <<excited>>. " +
+                "Example: Nice to see you. <<happy>> " +
+                "The app separately executes clear commands to stop, follow, move forward or backward, " +
+                "and turn left or right; acknowledge such a request briefly, but never claim that you " +
+                "performed any other physical action."
     }
 }

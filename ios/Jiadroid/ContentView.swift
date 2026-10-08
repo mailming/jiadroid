@@ -85,7 +85,7 @@ private struct EyesScreen: View {
 
     var body: some View {
         ZStack {
-            EyesFace(lookX: sim.lookX, lookY: sim.lookY)
+            EyesFace(lookX: sim.lookX, lookY: sim.lookY, emotion: voice.emotion)
                 .contentShape(Rectangle())
                 .onTapGesture(perform: openDebug)
             VStack {
@@ -115,38 +115,156 @@ private struct EyesScreen: View {
 private struct EyesFace: View {
     var lookX: Float
     var lookY: Float
+    var emotion: Emotion
 
     var body: some View {
-        Canvas { context, size in
-            let eyeWidth = min(size.width * 0.34, size.height * 0.62)
-            let eyeHeight = min(size.height * 0.58, eyeWidth * 0.92)
-            let gap = size.width * 0.055
-            let centerY = size.height * 0.5
-            let leftX = size.width * 0.5 - gap / 2 - eyeWidth / 2
-            let rightX = size.width * 0.5 + gap / 2 + eyeWidth / 2
-            eye(context, leftX, centerY, eyeWidth, eyeHeight)
-            eye(context, rightX, centerY, eyeWidth, eyeHeight)
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            let blink = blinkAmount(at: timeline.date)
+            let mood = EyeMood(emotion)
+            let wobble: Float = emotion == .thinking
+                ? 0.012 * Float(sin(timeline.date.timeIntervalSinceReferenceDate * 5.5))
+                : 0
+            Canvas { context, size in
+                let face = mood.face
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(face))
+                let eyeWidth = min(size.width * 0.34, size.height * 0.62)
+                let eyeHeight = min(size.height * 0.58, eyeWidth * 0.92) * mood.heightScale
+                let gap = size.width * 0.055
+                let centerY = size.height * 0.5
+                let leftX = size.width * 0.5 - gap / 2 - eyeWidth / 2
+                let rightX = size.width * 0.5 + gap / 2 + eyeWidth / 2
+                eye(context, leftX, centerY, eyeWidth, eyeHeight, blink: blink, mood: mood, wobble: wobble, face: face)
+                eye(context, rightX, centerY, eyeWidth, eyeHeight, blink: blink, mood: mood, wobble: wobble, face: face)
+                if mood.cheekAlpha > 0 {
+                    let r = eyeWidth * 0.18
+                    let cheek = Color(red: 1, green: 0.47, blue: 0.51).opacity(mood.cheekAlpha)
+                    context.fill(Path(ellipseIn: CGRect(x: leftX - r, y: centerY + eyeHeight * 0.55 - r, width: r * 2, height: r * 2)), with: .color(cheek))
+                    context.fill(Path(ellipseIn: CGRect(x: rightX - r, y: centerY + eyeHeight * 0.55 - r, width: r * 2, height: r * 2)), with: .color(cheek))
+                }
+            }
         }
         .ignoresSafeArea()
+        .background(EyeMood(emotion).face)
     }
 
-    private func eye(_ context: GraphicsContext, _ cx: CGFloat, _ cy: CGFloat, _ eyeWidth: CGFloat, _ eyeHeight: CGFloat) {
-        let rect = CGRect(x: cx - eyeWidth / 2, y: cy - eyeHeight / 2, width: eyeWidth, height: eyeHeight)
+    private func blinkAmount(at date: Date) -> CGFloat {
+        // ~3s cycle: quick close then open, then a pause.
+        let t = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3.2)
+        if t < 0.09 { return CGFloat(t / 0.09) }
+        if t < 0.18 { return CGFloat(1 - (t - 0.09) / 0.09) }
+        return 0
+    }
+
+    private func eye(
+        _ context: GraphicsContext,
+        _ cx: CGFloat,
+        _ cy: CGFloat,
+        _ eyeWidth: CGFloat,
+        _ eyeHeight: CGFloat,
+        blink: CGFloat,
+        mood: EyeMood,
+        wobble: Float,
+        face: Color
+    ) {
+        let open = max(0.06, (1 - blink) * mood.lidOpen)
+        let visibleHeight = eyeHeight * open
+        let rect = CGRect(x: cx - eyeWidth / 2, y: cy - visibleHeight / 2, width: eyeWidth, height: visibleHeight)
         context.fill(Path(ellipseIn: rect), with: .color(.white))
         context.stroke(Path(ellipseIn: rect), with: .color(Color(red: 0.21, green: 0.18, blue: 0.15)), lineWidth: 8)
-        let irisRadius = min(eyeWidth, eyeHeight) * 0.25
+
+        let irisRadius = min(eyeWidth, eyeHeight) * 0.25 * mood.irisScale
         let pupil = CGPoint(
-            x: cx + CGFloat(lookX) * eyeWidth * 0.23,
+            x: cx + CGFloat(lookX + wobble) * eyeWidth * 0.23,
             y: cy + CGFloat(lookY) * eyeHeight * 0.2
         )
-        context.fill(Path(ellipseIn: CGRect(x: pupil.x - irisRadius, y: pupil.y - irisRadius, width: irisRadius * 2, height: irisRadius * 2)), with: .color(Color(red: 0.416, green: 0.682, blue: 0.439)))
-        let pupilRadius = irisRadius * 0.52
-        context.fill(Path(ellipseIn: CGRect(x: pupil.x - pupilRadius, y: pupil.y - pupilRadius, width: pupilRadius * 2, height: pupilRadius * 2)), with: .color(Color(red: 0.137, green: 0.122, blue: 0.114)))
+        context.fill(
+            Path(ellipseIn: CGRect(x: pupil.x - irisRadius, y: pupil.y - irisRadius, width: irisRadius * 2, height: irisRadius * 2)),
+            with: .color(mood.iris)
+        )
+        let pupilRadius = irisRadius * 0.52 * mood.pupilScale
+        context.fill(
+            Path(ellipseIn: CGRect(x: pupil.x - pupilRadius, y: pupil.y - pupilRadius, width: pupilRadius * 2, height: pupilRadius * 2)),
+            with: .color(Color(red: 0.137, green: 0.122, blue: 0.114))
+        )
         let shine = irisRadius * 0.15
         context.fill(
             Path(ellipseIn: CGRect(x: pupil.x - irisRadius * 0.2 - shine, y: pupil.y - irisRadius * 0.22 - shine, width: shine * 2, height: shine * 2)),
             with: .color(.white)
         )
+
+        let lidCover = eyeHeight * (1 - open)
+        if lidCover > 1 {
+            context.fill(
+                Path(CGRect(x: cx - eyeWidth / 2 - 2, y: cy - eyeHeight / 2 - 2, width: eyeWidth + 4, height: lidCover)),
+                with: .color(face)
+            )
+        }
+
+        let browY = cy - eyeHeight * 0.62 + mood.browLift * eyeHeight
+        var brow = Path()
+        brow.move(to: CGPoint(x: cx - eyeWidth * 0.42, y: browY + mood.browTilt * eyeHeight * 0.08))
+        brow.addQuadCurve(
+            to: CGPoint(x: cx + eyeWidth * 0.42, y: browY - mood.browTilt * eyeHeight * 0.08),
+            control: CGPoint(x: cx, y: browY + mood.browTilt * eyeHeight * 0.12)
+        )
+        context.stroke(brow, with: .color(Color(red: 0.21, green: 0.18, blue: 0.15)), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+    }
+}
+
+private struct EyeMood {
+    let face: Color
+    let iris: Color
+    let lidOpen: CGFloat
+    let irisScale: CGFloat
+    let pupilScale: CGFloat
+    let heightScale: CGFloat
+    let browLift: CGFloat
+    let browTilt: CGFloat
+    let cheekAlpha: Double
+
+    init(_ emotion: Emotion) {
+        switch emotion {
+        case .neutral:
+            face = Color(red: 1, green: 0.957, blue: 0.824)
+            iris = Color(red: 0.416, green: 0.682, blue: 0.439)
+            lidOpen = 1; irisScale = 1; pupilScale = 1; heightScale = 1
+            browLift = 0; browTilt = 0; cheekAlpha = 0
+        case .happy:
+            face = Color(red: 1, green: 0.925, blue: 0.769)
+            iris = Color(red: 0.353, green: 0.667, blue: 0.471)
+            lidOpen = 0.78; irisScale = 1; pupilScale = 0.92; heightScale = 0.92
+            browLift = 0.04; browTilt = -0.6; cheekAlpha = 0.22
+        case .curious:
+            face = Color(red: 1, green: 0.957, blue: 0.824)
+            iris = Color(red: 0.392, green: 0.627, blue: 0.784)
+            lidOpen = 1; irisScale = 1.12; pupilScale = 1.15; heightScale = 1.05
+            browLift = 0.08; browTilt = 0.35; cheekAlpha = 0
+        case .listening:
+            face = Color(red: 1, green: 0.957, blue: 0.824)
+            iris = Color(red: 0.416, green: 0.682, blue: 0.439)
+            lidOpen = 1; irisScale = 1.08; pupilScale = 1.2; heightScale = 1
+            browLift = 0.02; browTilt = 0; cheekAlpha = 0
+        case .thinking:
+            face = Color(red: 0.961, green: 0.941, blue: 0.902)
+            iris = Color(red: 0.471, green: 0.588, blue: 0.51)
+            lidOpen = 0.9; irisScale = 0.95; pupilScale = 0.85; heightScale = 0.95
+            browLift = 0.1; browTilt = 0.5; cheekAlpha = 0
+        case .confused:
+            face = Color(red: 0.98, green: 0.949, blue: 0.863)
+            iris = Color(red: 0.549, green: 0.588, blue: 0.392)
+            lidOpen = 0.95; irisScale = 1.05; pupilScale = 1.05; heightScale = 1
+            browLift = 0.12; browTilt = 0.9; cheekAlpha = 0
+        case .sad:
+            face = Color(red: 0.922, green: 0.933, blue: 0.961)
+            iris = Color(red: 0.353, green: 0.51, blue: 0.588)
+            lidOpen = 0.7; irisScale = 0.95; pupilScale = 1.1; heightScale = 0.9
+            browLift = -0.06; browTilt = 0.7; cheekAlpha = 0
+        case .excited:
+            face = Color(red: 1, green: 0.902, blue: 0.745)
+            iris = Color(red: 0.314, green: 0.745, blue: 0.431)
+            lidOpen = 1; irisScale = 1.18; pupilScale = 1.25; heightScale = 1.08
+            browLift = 0.1; browTilt = -0.4; cheekAlpha = 0.27
+        }
     }
 }
 

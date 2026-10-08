@@ -26,6 +26,7 @@ class VoiceSession(
     private val onLine: (String) -> Unit,
     private val onTurn: (who: String, text: String) -> Unit,
     private val onHearing: (String) -> Unit,
+    private val onEmotion: (Emotion) -> Unit,
     private val onAction: (VoiceAction) -> Unit,
 ) {
     /** When null, replies come from the phone's own short list. */
@@ -117,6 +118,7 @@ class VoiceSession(
         val thread = Thread({ pump() }, "jiadroid-mic")
         listenThread = thread
         thread.start()
+        onEmotion(Emotion.LISTENING)
         onLine("Listening")
     }
 
@@ -138,13 +140,23 @@ class VoiceSession(
             }
             if (reportedDrop) {
                 reportedDrop = false
-                activity.runOnUiThread { if (alive && !speaking) onLine("Listening") }
+                activity.runOnUiThread {
+                    if (alive && !speaking) {
+                        onEmotion(Emotion.LISTENING)
+                        onLine("Listening")
+                    }
+                }
             }
             if (speaking || read == 0) continue
             val heard = accept(buffer, read) ?: continue
             activity.runOnUiThread {
                 if (!alive || speaking) return@runOnUiThread
-                if (heard.partial) onHearing(heard.text) else answer(heard.text)
+                if (heard.partial) {
+                    onEmotion(Emotion.LISTENING)
+                    onHearing(heard.text)
+                } else {
+                    answer(heard.text)
+                }
             }
         }
         closeRecorder()
@@ -210,6 +222,7 @@ class VoiceSession(
         speaking = false
         speakGeneration += 1
         if (!alive) return
+        onEmotion(Emotion.LISTENING)
         onLine("Listening")
     }
 
@@ -226,7 +239,7 @@ class VoiceSession(
         onTurn("You", heard)
         if (attention.utterance.isEmpty()) {
             speaking = true
-            speak("Yes?")
+            speak(SpokenReply("Yes?", Emotion.CURIOUS))
             return
         }
         parseVoiceAction(attention.utterance)?.let { action ->
@@ -240,6 +253,7 @@ class VoiceSession(
             speak(reply(attention.utterance, seen, name))
             return
         }
+        onEmotion(Emotion.THINKING)
         onLine("Thinking")
         thinker.execute {
             val spoken = try {
@@ -252,13 +266,14 @@ class VoiceSession(
         }
     }
 
-    private fun speak(spoken: String) {
-        onTurn("Me", spoken)
-        onLine(spoken)
+    private fun speak(spoken: SpokenReply) {
+        onEmotion(spoken.emotion)
+        onTurn("Me", spoken.say)
+        onLine(spoken.say)
         val speaker = speaker
         val generation = ++speakGeneration
         if (!readyToSpeak || speaker == null ||
-            speaker.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "reply") == TextToSpeech.ERROR
+            speaker.speak(spoken.say, TextToSpeech.QUEUE_FLUSH, null, "reply") == TextToSpeech.ERROR
         ) {
             onTurn("Voice", "text to speech is not ready")
             resume()
