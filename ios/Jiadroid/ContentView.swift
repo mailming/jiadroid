@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
 
 struct ContentView: View {
@@ -52,7 +53,13 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 StatusSection(status: session.status)
                 DuckSection(sim: session.sim)
-                LinkSection(link: session.link, toggle: session.toggleLink, toggleUsb: session.toggleUsb)
+                LinkSection(
+                    link: session.link,
+                    toggle: session.toggleLink,
+                    toggleUsb: session.toggleUsb,
+                    saveWifi: session.saveWifi,
+                    flashFirmware: session.flashFirmware
+                )
                 BrainSection(voice: session.voice, use: { session.useBrain(save: true) })
                 Button("Eyes") { setDebug(false) }
                     .buttonStyle(.bordered)
@@ -233,6 +240,9 @@ private struct LinkSection: View {
     @ObservedObject var link: LinkModel
     let toggle: () -> Void
     let toggleUsb: () -> Void
+    let saveWifi: () -> Void
+    let flashFirmware: (Data) -> Void
+    @State private var pickingFirmware = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -245,13 +255,41 @@ private struct LinkSection: View {
                     .onSubmit(toggle)
                     .fieldStyle()
                 Button(link.connecting ? "…" : (link.connected ? "Disconnect" : "Connect"), action: toggle)
-                    .disabled(link.connecting)
+                    .disabled(link.connecting || link.wifiBusy)
                     .buttonStyle(.borderedProminent)
                     .tint(Color.ink)
                 Button(link.connecting ? "…" : (link.connected ? "Disconnect" : "USB"), action: toggleUsb)
-                    .disabled(link.connecting)
+                    .disabled(link.connecting || link.wifiBusy)
                     .buttonStyle(.bordered)
                     .tint(Color.ink)
+            }
+            HStack(spacing: 8) {
+                TextField("Robot Wi‑Fi SSID", text: $link.wifiSsid)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .fieldStyle()
+                SecureField("Password", text: $link.wifiPassword)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .fieldStyle()
+                Button("Save Wi‑Fi", action: saveWifi)
+                    .disabled(!link.canConfigureWifi || link.wifiBusy)
+                    .buttonStyle(.bordered)
+                    .tint(Color.ink)
+                Button("Flash .bin") { pickingFirmware = true }
+                    .disabled(!link.canFlashFirmware || link.wifiBusy)
+                    .buttonStyle(.bordered)
+                    .tint(Color.ink)
+                    .fileImporter(isPresented: $pickingFirmware, allowedContentTypes: [.data, .item], allowsMultipleSelection: false) { result in
+                        guard case let .success(urls) = result, let url = urls.first else { return }
+                        let access = url.startAccessingSecurityScopedResource()
+                        defer { if access { url.stopAccessingSecurityScopedResource() } }
+                        if let data = try? Data(contentsOf: url) {
+                            flashFirmware(data)
+                        } else {
+                            link.linkText = "Can't read that firmware file."
+                        }
+                    }
             }
             HStack(spacing: 8) {
                 Text("QR code")

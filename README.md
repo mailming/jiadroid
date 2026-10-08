@@ -153,7 +153,7 @@ The Android and iOS apps follow a real person, a printed photo of a person, or a
 1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match.
 2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
 3. Point the camera at the target. Center it and the duck walks forward. Move it to either side and the duck turns. Come too close, or leave the view, and the duck stops.
-4. To drive a laptop simulator or the chassis over Wi‑Fi, start one where the phone can reach it, then enter that address and tap **Connect**. On Android you can instead plug USB‑C OTG into the board USB port and tap **USB**. On iPhone, **USB** explains that serial is unavailable and Wi‑Fi is the path.
+4. To drive a laptop simulator or the chassis over Wi‑Fi, start one where the phone can reach it, then enter that address and tap **Connect**. On Android you can instead plug USB‑C OTG into the board USB port and tap **USB**, then **Save Wi‑Fi** so later phones (including iPhone) can use the LAN. **Flash .bin** pushes a new sketch over that link (Wi‑Fi preferred). On iPhone, **USB** explains that serial is unavailable; after the robot is on Wi‑Fi, Connect / Save Wi‑Fi / Flash .bin work the same.
 
 ```bash
 python -m pip install -e .

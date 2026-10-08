@@ -4,6 +4,7 @@
 #include "config.h"
 #include "protocol.h"
 #include "status_led.h"
+#include "wifi_config.h"
 
 // USB CDC (Serial) is the phone protocol link (OTG). UART0 (Serial0) is debug.
 // Optional Wi-Fi is a fallback when USB is free.
@@ -22,9 +23,45 @@ static unsigned long nextUsbHelloMs = 0;
 static unsigned long nextWifiAttemptMs = 0;
 static char line[8192];
 static size_t lineLength = 0;
+static uint8_t otaBuf[1024];
 
 static void logMsg(const char *message) {
     Serial0.println(message);
+}
+
+static void dropPeer(const char *reason);
+
+static void stopWifiServer() {
+    if (wifiServerStarted) {
+        server.end();
+        wifiServerStarted = false;
+    }
+    if (wifiClient) {
+        wifiClient.stop();
+    }
+}
+
+static void applyWifiCredentials(const char *reason) {
+    stopWifiServer();
+    wifiStarted = false;
+    if (peer != nullptr && peerIsWifi) {
+        dropPeer(reason);
+    }
+    WiFi.disconnect(true, true);
+    delay(100);
+    if (!wifiConfigConfigured()) {
+        statusLedSet(STATUS_LED_WIFI_FAIL);
+        logMsg("Wi-Fi cleared.");
+        return;
+    }
+    wifiStarted = true;
+    statusLedSet(STATUS_LED_WIFI_WAIT);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.begin(wifiConfigSsid(), wifiConfigPassword());
+    Serial0.print("Joining ");
+    Serial0.println(wifiConfigSsid());
+    nextWifiAttemptMs = millis() + 5000;
 }
 
 static void dropPeer(const char *reason) {
@@ -46,8 +83,10 @@ static void dropPeer(const char *reason) {
     protocolSetUsbLogMirror(false);
     if (WiFi.status() == WL_CONNECTED) {
         statusLedSet(STATUS_LED_WIFI_OK);
-    } else {
+    } else if (wifiConfigConfigured()) {
         statusLedSet(STATUS_LED_WIFI_WAIT);
+    } else {
+        statusLedSet(STATUS_LED_WIFI_FAIL);
     }
 }
 
@@ -76,7 +115,7 @@ static bool beginPeer(Stream *stream, bool wifi, const char *label) {
 }
 
 static void startWifiNonBlocking() {
-    if (WIFI_SSID[0] == '\0' || strcmp(WIFI_SSID, "your-network") == 0) {
+    if (!wifiConfigConfigured()) {
         return;
     }
     if (wifiStarted) {
@@ -86,13 +125,17 @@ static void startWifiNonBlocking() {
     statusLedSet(STATUS_LED_WIFI_WAIT);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.begin(wifiConfigSsid(), wifiConfigPassword());
     Serial0.print("Joining ");
-    Serial0.println(WIFI_SSID);
+    Serial0.println(wifiConfigSsid());
 }
 
 static void pollWifi(unsigned long nowMs) {
-    if (WIFI_SSID[0] == '\0' || strcmp(WIFI_SSID, "your-network") == 0) {
+    if (wifiConfigTakePendingRestart()) {
+        applyWifiCredentials("Rejoining Wi-Fi with new credentials.");
+        return;
+    }
+    if (!wifiConfigConfigured()) {
         return;
     }
     if (!wifiStarted) {
@@ -103,7 +146,7 @@ static void pollWifi(unsigned long nowMs) {
         if (nowMs > nextWifiAttemptMs) {
             nextWifiAttemptMs = nowMs + 5000;
             WiFi.disconnect(false);
-            WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+            WiFi.begin(wifiConfigSsid(), wifiConfigPassword());
             logMsg("Wi-Fi retry…");
         }
         return;
@@ -187,6 +230,31 @@ static void readPeer(unsigned long nowMs) {
     if (peer == nullptr) {
         return;
     }
+    if (protocolOtaActive()) {
+        while (peer->available()) {
+            size_t n = peer->readBytes(otaBuf, sizeof(otaBuf));
+            if (n == 0) {
+                break;
+            }
+            bool restart = false;
+            if (!protocolOtaConsume(*peer, otaBuf, n, &restart)) {
+                dropPeer("Firmware update failed.");
+                return;
+            }
+            if (restart) {
+                logMsg("Rebooting into new firmware.");
+                delay(200);
+                ESP.restart();
+            }
+            if (!protocolOtaActive()) {
+                break;
+            }
+        }
+        if (peerIsWifi && !wifiClient.connected()) {
+            dropPeer("Phone disconnected.");
+        }
+        return;
+    }
     while (peer->available()) {
         int next = peer->read();
         if (next < 0) {
@@ -217,6 +285,10 @@ static void readPeer(unsigned long nowMs) {
             usbAwaitingClient = false;
         }
         lineLength = 0;
+        if (protocolOtaActive()) {
+            // Remainder of this connection is the firmware image.
+            break;
+        }
     }
     if (peerIsWifi && !wifiClient.connected()) {
         dropPeer("Phone disconnected.");
@@ -233,6 +305,7 @@ void setup() {
     delay(300);
     protocolSetLogStream(&Serial0);
     protocolSetUsbLogMirror(false);
+    wifiConfigBegin();
     statusLedBegin();
     logMsg("Jiadroid 2WD chassis (USB-C primary)");
     logMsg("Plug phone OTG into the USB port, then tap USB in the app.");

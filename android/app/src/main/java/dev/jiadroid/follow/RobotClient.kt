@@ -59,9 +59,65 @@ class RobotClient private constructor(
     private val ids = AtomicInteger(1)
     private val pending = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
     private val hello = LinkedBlockingQueue<JSONObject>()
+    private val firmwareDone = LinkedBlockingQueue<JSONObject>(1)
     private val thread = Thread(::readLoop, "jiadroid-read")
 
     fun supports(op: String): Boolean = controls.containsKey(op)
+
+    fun setWifi(ssid: String, password: String): JSONObject {
+        val body = JSONObject()
+        body.put("ssid", ssid)
+        body.put("password", password)
+        return request("wifi.set", body, 5000)
+    }
+
+    fun clearWifi(): JSONObject = request("wifi.clear", JSONObject(), 5000)
+
+    fun wifiStatus(): JSONObject = request("wifi.status", JSONObject(), 5000)
+
+    /**
+     * Stream a firmware.bin after [firmware.begin]. Prefer Wi‑Fi; USB works but is slower.
+     * The robot reboots on success — this link will drop.
+     */
+    fun installFirmware(input: java.io.InputStream, size: Long, onProgress: (Long) -> Unit = {}) {
+        if (!supports("firmware.begin")) {
+            throw IllegalStateException("This robot does not accept firmware updates")
+        }
+        if (size < 1024) throw IllegalStateException("Firmware file is too small")
+        firmwareDone.clear()
+        val begin = JSONObject()
+        begin.put("size", size)
+        request("firmware.begin", begin, 8000)
+        val buffer = ByteArray(4096)
+        var sent = 0L
+        synchronized(writeLock) {
+            while (sent < size) {
+                if (closed.get()) throw IllegalStateException("Robot connection closed during firmware upload")
+                val want = minOf(buffer.size.toLong(), size - sent).toInt()
+                val n = input.read(buffer, 0, want)
+                if (n <= 0) throw IllegalStateException("Firmware file ended early")
+                output.write(buffer, 0, n)
+                sent += n
+                onProgress(sent)
+            }
+            output.flush()
+        }
+        val done = firmwareDone.poll(180, TimeUnit.SECONDS)
+            ?: throw IllegalStateException(
+                if (closed.get()) {
+                    "Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds."
+                } else {
+                    "Timed out waiting for firmware.complete"
+                },
+            )
+        if (done.optString("kind") == "closed") {
+            throw IllegalStateException("Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds.")
+        }
+        val body = done.optJSONObject("body") ?: JSONObject()
+        if (!body.optBoolean("ok", false)) {
+            throw IllegalStateException(body.optString("message").ifEmpty { "Firmware update failed" })
+        }
+    }
 
     fun walk(decision: FollowDecision) {
         if (supports("motion.velocity")) {
@@ -231,7 +287,10 @@ class RobotClient private constructor(
                 }
                 when (message.optString("kind")) {
                     "res" -> pending[message.optString("id")]?.offer(message)
-                    "evt" -> if (message.optString("op") == "session.hello") hello.offer(message)
+                    "evt" -> when (message.optString("op")) {
+                        "session.hello" -> hello.offer(message)
+                        "firmware.complete" -> firmwareDone.offer(message)
+                    }
                 }
             }
         } catch (_: Exception) {

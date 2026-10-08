@@ -6,9 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <Update.h>
+
 #include "chassis.h"
 #include "config.h"
 #include "status_led.h"
+#include "wifi_config.h"
 
 static Stream *logStream = nullptr;
 static bool usbLogMirror = false;
@@ -58,6 +61,11 @@ static double payloadPosition[3] = {0, 0, 0};
 static char payloadName[65] = "";
 
 static char errorMessage[96];
+
+static bool otaActive = false;
+static size_t otaRemaining = 0;
+static size_t otaTotal = 0;
+static char otaRequestId[32] = "";
 
 static bool sendDocument(Stream &peer, JsonDocument &doc) {
     static char out[3072];
@@ -323,6 +331,7 @@ static void fillHello(JsonObject body) {
     robot["name"] = "2WD Chassis";
     robot["kind"] = "wheeled";
     addSafety(body);
+    wifiConfigFillStatus(body["wifi"].to<JsonObject>());
     JsonObject controls = body["controls"].to<JsonObject>();
     JsonObject motion = controls["motion.velocity"].to<JsonObject>();
     JsonArray forward = motion["forward"].to<JsonArray>();
@@ -331,6 +340,10 @@ static void fillHello(JsonObject body) {
     JsonArray yaw = motion["yaw"].to<JsonArray>();
     yaw.add(-MAX_YAW_RAD_S);
     yaw.add(MAX_YAW_RAD_S);
+    controls["wifi.set"].to<JsonObject>();
+    controls["wifi.clear"].to<JsonObject>();
+    controls["wifi.status"].to<JsonObject>();
+    controls["firmware.begin"].to<JsonObject>();
     JsonArray mounts = body["mounts"].to<JsonArray>();
     JsonObject mount = mounts.add<JsonObject>();
     mount["id"] = "top";
@@ -340,6 +353,16 @@ static void fillHello(JsonObject body) {
     position.add(MOUNT_Z_M);
     mount["max_mass"] = MOUNT_MAX_MASS_KG;
     fillDevices(body["devices"].to<JsonArray>());
+}
+
+static void abortOta() {
+    if (otaActive) {
+        Update.abort();
+    }
+    otaActive = false;
+    otaRemaining = 0;
+    otaTotal = 0;
+    otaRequestId[0] = '\0';
 }
 
 static void fillPayload(JsonObject body) {
@@ -415,6 +438,54 @@ static bool succeed(Stream &peer, const char *kind, const char *op, const char *
 void protocolResetSession() {
     telemetryOn = false;
     telemetryHz = 10;
+    abortOta();
+}
+
+bool protocolOtaActive() {
+    return otaActive;
+}
+
+bool protocolOtaConsume(Stream &peer, const uint8_t *data, size_t len, bool *restart) {
+    *restart = false;
+    if (!otaActive || data == nullptr || len == 0) {
+        return true;
+    }
+    if (len > otaRemaining) {
+        snprintf(errorMessage, sizeof(errorMessage), "firmware image sent too many bytes");
+        abortOta();
+        return false;
+    }
+    size_t written = Update.write(const_cast<uint8_t *>(data), len);
+    if (written != len) {
+        snprintf(errorMessage, sizeof(errorMessage), "firmware write failed");
+        abortOta();
+        return false;
+    }
+    otaRemaining -= len;
+    if (otaRemaining > 0) {
+        return true;
+    }
+    bool ok = Update.end(true);
+    otaActive = false;
+    otaRequestId[0] = '\0';
+    JsonDocument result;
+    JsonObject resultBody = result.to<JsonObject>();
+    if (!ok) {
+        snprintf(errorMessage, sizeof(errorMessage), "firmware verify failed");
+        resultBody["ok"] = false;
+        resultBody["message"] = errorMessage;
+        succeed(peer, "evt", "firmware.complete", nullptr, result);
+        return false;
+    }
+    resultBody["ok"] = true;
+    resultBody["bytes"] = (double)otaTotal;
+    resultBody["rebooting"] = true;
+    if (!succeed(peer, "evt", "firmware.complete", nullptr, result)) {
+        return false;
+    }
+    logCmd("firmware.complete");
+    *restart = true;
+    return true;
 }
 
 bool protocolSendHello(Stream &peer) {
@@ -424,6 +495,7 @@ bool protocolSendHello(Stream &peer) {
 }
 
 void protocolOnDisconnect() {
+    abortOta();
     protocolResetSession();
     stopMotion();
 }
@@ -682,6 +754,65 @@ bool protocolHandleLine(Stream &peer, const char *line) {
         }
         statusLedSet(STATUS_LED_CLEAR);
         addSafety(resultBody);
+        return succeed(peer, "res", op, id, result);
+    }
+    if (strcmp(op, "wifi.status") == 0) {
+        wifiConfigFillStatus(resultBody);
+        return succeed(peer, "res", op, id, result);
+    }
+    if (strcmp(op, "wifi.set") == 0) {
+        const char *ssid = body["ssid"].as<const char *>();
+        const char *password = body["password"].isNull() ? "" : body["password"].as<const char *>();
+        if (ssid == nullptr || password == nullptr || !wifiConfigSet(ssid, password)) {
+            snprintf(errorMessage, sizeof(errorMessage), "ssid must be 1–32 characters; password at most 64");
+            return fail(peer, op, id, "out_of_range");
+        }
+        logCmd(op);
+        wifiConfigFillStatus(resultBody);
+        resultBody["applied"] = true;
+        return succeed(peer, "res", op, id, result);
+    }
+    if (strcmp(op, "wifi.clear") == 0) {
+        logCmd(op);
+        wifiConfigClear();
+        resultBody["cleared"] = true;
+        wifiConfigFillStatus(resultBody);
+        return succeed(peer, "res", op, id, result);
+    }
+    if (strcmp(op, "firmware.begin") == 0) {
+        if (otaActive) {
+            snprintf(errorMessage, sizeof(errorMessage), "firmware update already in progress");
+            return fail(peer, op, id, "out_of_range");
+        }
+        if (!body["size"].is<float>() && !body["size"].is<int>()) {
+            snprintf(errorMessage, sizeof(errorMessage), "firmware size must be a positive byte count");
+            return fail(peer, op, id, "out_of_range");
+        }
+        double sizeNumber = body["size"].as<double>();
+        if (!isfinite(sizeNumber) || sizeNumber < 1024 || sizeNumber > 4.0 * 1024 * 1024) {
+            snprintf(errorMessage, sizeof(errorMessage), "firmware size must be from 1024 to 4194304 bytes");
+            return fail(peer, op, id, "out_of_range");
+        }
+        size_t size = (size_t)sizeNumber;
+        size_t maxSpace = ESP.getFreeSketchSpace();
+        if (maxSpace > 0 && size > maxSpace) {
+            snprintf(errorMessage, sizeof(errorMessage), "firmware is larger than the free OTA slot (%u bytes)", (unsigned)maxSpace);
+            return fail(peer, op, id, "out_of_range");
+        }
+        stopMotion();
+        if (!Update.begin(size)) {
+            snprintf(errorMessage, sizeof(errorMessage), "cannot start firmware update");
+            return fail(peer, op, id, "out_of_range");
+        }
+        otaActive = true;
+        otaRemaining = size;
+        otaTotal = size;
+        strlcpy(otaRequestId, id == nullptr ? "" : id, sizeof(otaRequestId));
+        logCmd(op);
+        resultBody["ok"] = true;
+        resultBody["size"] = (double)size;
+        resultBody["max"] = (double)(maxSpace > 0 ? maxSpace : size);
+        // Response acknowledges begin; firmware.complete arrives after the raw bytes.
         return succeed(peer, "res", op, id, result);
     }
     snprintf(errorMessage, sizeof(errorMessage), "unknown operation %s", op);

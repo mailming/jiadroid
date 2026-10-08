@@ -13,6 +13,15 @@
     <string name="connected">Sending commands to %1$s (%2$s) · %3$d devices at %4$s:%5$d</string>
     <string name="connected_usb">Sending commands to %1$s (%2$s) · %3$d devices over USB‑C</string>
     <string name="need_usb">Plug the ESP32 USB port into the phone with a USB‑C OTG cable, then tap USB.</string>
+    <string name="wifi_ssid_hint">Robot Wi‑Fi SSID</string>
+    <string name="wifi_password_hint">Password</string>
+    <string name="wifi_save">Save Wi‑Fi</string>
+    <string name="firmware_flash">Flash .bin</string>
+    <string name="wifi_saved">Saved Wi‑Fi “%1$s”. Robot is joining the network…</string>
+    <string name="wifi_need_ssid">Enter the robot Wi‑Fi name, then tap Save Wi‑Fi.</string>
+    <string name="firmware_need_link">Connect to the robot first (USB or Wi‑Fi), then pick a firmware.bin.</string>
+    <string name="firmware_uploading">Uploading firmware… %1$d%%</string>
+    <string name="firmware_done">Firmware uploaded. Robot is rebooting — reconnect in a few seconds.</string>
     <string name="code_width">QR code</string>
     <string name="person_height">Person height</string>
     <string name="millimeters">mm</string>

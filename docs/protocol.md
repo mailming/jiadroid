@@ -275,6 +275,34 @@ Request body `{}`. Response body `{"safety": {"state": "estop"}}`.
 
 Request body `{}`. Response body `{"safety": {"state": "ready"}}` when a latch was cleared.
 
+### `wifi.status`
+
+Request body `{}`. Response body describes the station link (password is never returned):
+
+```json
+{"configured": true, "ssid": "home", "connected": true, "ip": "192.168.1.50", "rssi": -48}
+```
+
+Chassis firmware also puts the same object on `session.hello` as `wifi`.
+
+### `wifi.set`
+
+Request body `{"ssid": "home", "password": "secret"}`. `ssid` is 1–32 characters; `password` may be empty and at most 64 characters. Response echoes `wifi.status` fields plus `"applied": true`. Credentials are stored in NVS and the robot rejoins that network. Typical first use is over USB from Android; afterward any phone can reach the robot on Wi‑Fi.
+
+### `wifi.clear`
+
+Request body `{}`. Clears stored credentials and disconnects station Wi‑Fi. Response `{"cleared": true, ...status fields...}`.
+
+### `firmware.begin`
+
+Request body `{"size": 416688}` — the exact byte length of the `.bin` that follows. Response `{"ok": true, "size": 416688, "max": ...}`. The client then writes exactly `size` raw bytes on the same stream (not JSON). When the image is verified the robot emits:
+
+```json
+{"v":1,"kind":"evt","op":"firmware.complete","body":{"ok":true,"bytes":416688,"rebooting":true}}
+```
+
+and reboots. Prefer Wi‑Fi for large uploads; USB works but is slower. Requires an OTA partition table on the ESP32.
+
 ## Errors
 
 Failed responses use `error.code`:

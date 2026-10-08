@@ -126,16 +126,20 @@ The DevKitC‑1 onboard WS2812 (GPIO **38** on v1.1, set `PIN_STATUS_RGB` in `co
 
 ## Talk to it (USB‑C MVP)
 
-1. Flash from a laptop on the **USB** port, then unplug the laptop.
+1. Flash from a laptop on the **USB** port, then unplug the laptop. (This is the only required laptop flash; later updates can come from the phone.)
 2. Plug that same **USB** port into an Android phone with a USB‑C OTG cable (phone powers the ESP32).
 3. Put AA cells in for the motors; share GND between ESP32 and L9110S; wire GPIO 4–7 as above.
 4. Build/install the Android app from this branch. In Debug, tap **USB**. Allow USB permission. You should see `2WD Chassis` over USB‑C.
+5. Enter the robot’s Wi‑Fi SSID and password, tap **Save Wi‑Fi**. The chip stores them in NVS and joins the network (watch COM for `Listening on …:8765`).
+6. Later firmware drops: connect over Wi‑Fi (or USB), tap **Flash .bin**, and pick `firmware/.pio/build/esp32-s3-devkitc-1/firmware.bin` from a laptop share or Downloads. The board reboots into the new sketch.
 
 Debug logs (including `cmd motion.velocity …`) print on the **UART/COM** port at 115200, not on the USB protocol link. Leave COM unplugged during a phone demo unless you want a laptop log.
 
-### Optional Wi‑Fi fallback
+### Wi‑Fi
 
-Set `WIFI_SSID` / `WIFI_PASSWORD` in `config.h`, flash, and watch COM for `Listening on …:8765`. In either phone app, enter that address and tap **Connect** (not USB). The iOS app also has a **USB** button; it explains that Apple blocks CDC serial to this DevKit and points you at Wi‑Fi.
+Compile-time `WIFI_SSID` / `WIFI_PASSWORD` in `config.h` are only a first-boot fallback when NVS is empty. Prefer **Save Wi‑Fi** from the phone over USB so secrets stay off the laptop build. In either phone app, after the robot is on the LAN, enter `ip:8765` and tap **Connect**. The iOS **USB** button still cannot open CDC; use Wi‑Fi there, including **Save Wi‑Fi** and **Flash .bin** once connected.
+
+The firmware uses the `default_8MB` partition table (two OTA app slots) so phone updates can swap sketches without a serial flasher.
 
 ```bash
 python -c "from jiadroid import connect; robot = connect('tcp://192.168.1.50:8765'); print(robot.kind, robot.name); robot.move(forward=0.1); robot.stop(); robot.close()"
@@ -159,7 +163,7 @@ The bump switch cuts the part of the command that would drive into it. The phone
 
 ## What it does not do
 
-- iPhone over USB serial. Apple does not expose CDC to iPhone apps for this DevKit; use Wi‑Fi (the iOS **USB** button says so).
+- iPhone over USB serial. Apple does not expose CDC to iPhone apps for this DevKit; use Wi‑Fi (the iOS **USB** button says so). Wi‑Fi credential save and OTA flash work on iPhone after the robot is already on the LAN.
 - Bluetooth. Not implemented on this branch.
 - The Open Duck Mini. The duck's ESP32 link, the one that would write `motion.velocity` into the walk policy, is still unwritten.
 - A proven bring-up on the real plate. The project compiles here. Wheel direction, encoder direction, and the measured size of the plate still have to be checked on the hardware, then set in `config.h`.

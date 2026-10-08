@@ -119,6 +119,69 @@ final class FollowSession: ObservableObject, CameraSink {
         }
     }
 
+    func saveWifi() {
+        guard let robot = currentRobot(), robot.supports("wifi.set") else {
+            link.linkText = "Connect to the robot first (Wi‑Fi), then save credentials."
+            return
+        }
+        let ssid = link.wifiSsid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ssid.isEmpty {
+            link.linkText = "Enter the robot Wi‑Fi name, then tap Save Wi‑Fi."
+            return
+        }
+        let password = link.wifiPassword
+        link.wifiBusy = true
+        io.async { [weak self] in
+            do {
+                _ = try robot.setWifi(ssid: ssid, password: password)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.link.wifiBusy = false
+                    self.link.linkText = "Saved Wi‑Fi “\(ssid)”. Robot is joining the network…"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.link.wifiBusy = false
+                    self.link.linkText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func flashFirmware(_ data: Data) {
+        guard let robot = currentRobot(), robot.supports("firmware.begin") else {
+            link.linkText = "Connect to the robot over Wi‑Fi first, then pick a firmware.bin."
+            return
+        }
+        link.wifiBusy = true
+        link.linkText = "Uploading firmware… 0%"
+        io.async { [weak self] in
+            do {
+                try robot.installFirmware(data: data) { sent in
+                    let pct = data.isEmpty ? 0 : Int((Double(sent) * 100) / Double(data.count))
+                    DispatchQueue.main.async {
+                        self?.link.linkText = "Uploading firmware… \(pct)%"
+                    }
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.disconnect()
+                    self.link.linkText = "Firmware uploaded. Robot is rebooting — reconnect in a few seconds."
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.link.wifiBusy = false
+                    self.link.linkText = error.localizedDescription
+                    if self.currentRobot() === robot {
+                        self.failLink(robot, error)
+                    }
+                }
+            }
+        }
+    }
+
     func cameraDidMeasure(_ sighting: Sighting) {
         if sighting.subject == "Person", subject == "Marker", sim.scene.visible, Date().timeIntervalSince(lastMarkerAt) < 0.4 {
             return
@@ -293,7 +356,19 @@ final class FollowSession: ObservableObject, CameraSink {
         setRobot(robot)
         lastCommandKey = nil
         link.connected = true
+        link.canConfigureWifi = robot.supports("wifi.set")
+        link.canFlashFirmware = robot.supports("firmware.begin")
         link.linkText = status
+        if robot.supports("wifi.status") {
+            io.async { [weak self] in
+                guard let statusBody = try? robot.wifiStatus() else { return }
+                let ssid = statusBody["ssid"] as? String ?? ""
+                DispatchQueue.main.async {
+                    guard let self, self.currentRobot() === robot else { return }
+                    if !ssid.isEmpty { self.link.wifiSsid = ssid }
+                }
+            }
+        }
     }
 
     private func disconnect() {
@@ -302,6 +377,9 @@ final class FollowSession: ObservableObject, CameraSink {
         lastCommandKey = nil
         link.connected = false
         link.connecting = false
+        link.wifiBusy = false
+        link.canConfigureWifi = false
+        link.canFlashFirmware = false
         link.linkText = "Not connected. The duck above still follows what the camera sees."
         if let robot { release(robot) }
     }
@@ -311,6 +389,9 @@ final class FollowSession: ObservableObject, CameraSink {
         setRobot(nil)
         lastCommandKey = nil
         link.connected = false
+        link.wifiBusy = false
+        link.canConfigureWifi = false
+        link.canFlashFirmware = false
         link.linkText = error.localizedDescription
         release(robot)
     }
@@ -444,11 +525,16 @@ final class StatusModel: ObservableObject {
 
 final class LinkModel: ObservableObject {
     @Published var host = ""
+    @Published var wifiSsid = ""
+    @Published var wifiPassword = ""
     @Published var markerMM = "120"
     @Published var personMM = "1700"
     @Published var linkText = "Not connected. The duck above still follows what the camera sees."
     @Published var connected = false
     @Published var connecting = false
+    @Published var wifiBusy = false
+    @Published var canConfigureWifi = false
+    @Published var canFlashFirmware = false
     @Published var cameraMessage: String?
 }
 

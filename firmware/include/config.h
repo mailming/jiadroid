@@ -1,7 +1,8 @@
 #pragma once
 
-// Replace these before flashing. The chip joins this network and listens
-// on ROBOT_PORT, the same port as the laptop simulator.
+// First-boot Wi‑Fi fallback only. After the phone sends wifi.set over USB,
+// credentials live in NVS and override these. Leave as placeholders to skip
+// Wi‑Fi until the phone configures it.
 #define WIFI_SSID "your-network"
 #define WIFI_PASSWORD "your-password"
 
