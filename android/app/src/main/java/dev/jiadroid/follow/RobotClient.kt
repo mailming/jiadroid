@@ -223,7 +223,12 @@ class RobotClient private constructor(
             while (!closed.get()) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) continue
-                val message = JSONObject(line)
+                val message = try {
+                    JSONObject(line)
+                } catch (_: Exception) {
+                    // USB noise or a torn hello must not kill the session.
+                    continue
+                }
                 when (message.optString("kind")) {
                     "res" -> pending[message.optString("id")]?.offer(message)
                     "evt" -> if (message.optString("op") == "session.hello") hello.offer(message)

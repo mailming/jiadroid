@@ -17,6 +17,7 @@ static bool usbSession = false;
 static bool usbHostWas = false;
 static bool usbAwaitingClient = false;
 static unsigned long usbHostGoneMs = 0;
+static unsigned long usbHostSinceMs = 0;
 static unsigned long nextUsbHelloMs = 0;
 static unsigned long nextWifiAttemptMs = 0;
 static char line[8192];
@@ -61,11 +62,14 @@ static bool beginPeer(Stream *stream, bool wifi, const char *label) {
     lineLength = 0;
     protocolResetSession();
     protocolSetUsbLogMirror(wifi);
+    // USB host may not be reading yet right after open/reset — keep the peer
+    // and let pollUsbSession retry hello instead of dropping the session.
     if (!protocolSendHello(*peer)) {
-        dropPeer("Failed to send session.hello.");
-        return false;
+        logMsg("session.hello deferred.");
+        nextUsbHelloMs = millis() + 200;
+    } else {
+        nextUsbHelloMs = millis() + 1000;
     }
-    nextUsbHelloMs = millis() + 800;
     statusLedSet(STATUS_LED_IDLE);
     logMsg(label);
     return true;
@@ -141,7 +145,7 @@ static void pollUsbSession(unsigned long nowMs) {
         if (!host) {
             if (usbHostGoneMs == 0) {
                 usbHostGoneMs = nowMs;
-            } else if (nowMs - usbHostGoneMs > 3000) {
+            } else if (nowMs - usbHostGoneMs > 5000) {
                 // Phone USB open often glitches the host briefly around a reset.
                 dropPeer("Phone disconnected (USB).");
                 usbHostGoneMs = 0;
@@ -150,8 +154,11 @@ static void pollUsbSession(unsigned long nowMs) {
             usbHostGoneMs = 0;
             // Keep advertising hello until the phone app opens and speaks.
             if (usbAwaitingClient && (long)(nowMs - nextUsbHelloMs) >= 0) {
-                protocolSendHello(*peer);
-                nextUsbHelloMs = nowMs + 800;
+                if (protocolSendHello(*peer)) {
+                    nextUsbHelloMs = nowMs + 1000;
+                } else {
+                    nextUsbHelloMs = nowMs + 250;
+                }
             }
         }
         usbHostWas = host;
@@ -162,8 +169,16 @@ static void pollUsbSession(unsigned long nowMs) {
     if (host && peer != nullptr && peerIsWifi && !usbHostWas) {
         dropPeer("Yielding Wi-Fi to USB phone.");
     }
-    if (host && peer == nullptr) {
-        beginPeer(&Serial, false, "Phone connected over USB.");
+    // Wait for the host to stay up briefly so we do not hello into a reset.
+    if (host) {
+        if (usbHostSinceMs == 0) {
+            usbHostSinceMs = nowMs;
+        }
+        if (peer == nullptr && (nowMs - usbHostSinceMs) >= 400) {
+            beginPeer(&Serial, false, "Phone connected over USB.");
+        }
+    } else {
+        usbHostSinceMs = 0;
     }
     usbHostWas = host;
 }
@@ -223,10 +238,10 @@ void setup() {
     logMsg("Plug phone OTG into the USB port, then tap USB in the app.");
     chassisBegin();
 
-    // Prefer USB immediately — do not block on Wi-Fi first.
+    // Prefer USB, but let pollUsbSession start the peer after a short settle.
     if (static_cast<bool>(Serial) || Serial.available() > 0) {
-        beginPeer(&Serial, false, "Phone connected over USB.");
         usbHostWas = true;
+        usbHostSinceMs = millis();
     }
     startWifiNonBlocking();
 }

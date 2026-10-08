@@ -21,13 +21,14 @@ import java.io.PipedOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Opens an Espressif ESP32-S3 USB CDC port for [RobotClient].
  *
- * Opening the port often USB-resets the ESP32-S3 (LED blinks). We deliberately
- * open once to trigger that reset, wait for re-enumeration, then open again and
- * read session.hello while the firmware is stably repeating it.
+ * Opening the port often USB-resets the ESP32-S3. We bounce once to absorb that
+ * reset, reopen with a stable CDC session, and keep the read pipe alive across
+ * brief IO glitches so a torn hello does not look like "connection closed".
  */
 object UsbRobotLink {
     private const val TAG = "UsbRobotLink"
@@ -45,14 +46,15 @@ object UsbRobotLink {
         bouncePort(usb)
 
         var lastError: Exception? = null
-        repeat(5) { attempt ->
+        repeat(6) { attempt ->
             try {
                 ensurePermission(app, usb)
                 return openStable(usb)
             } catch (error: Exception) {
                 lastError = error
                 Log.i(TAG, "USB connect attempt ${attempt + 1} failed: ${error.message}")
-                Thread.sleep(1200L + attempt * 400L)
+                Thread.sleep(1000L + attempt * 500L)
+                waitForEspressif(usb, 6000)
             }
         }
         throw IllegalStateException(
@@ -90,8 +92,8 @@ object UsbRobotLink {
             Log.i(TAG, "USB bounce skipped: ${error.message}")
         }
         // Allow reboot + re-enumerate before the real open.
-        Thread.sleep(2800)
-        waitForEspressif(usb, 8000)
+        Thread.sleep(3000)
+        waitForEspressif(usb, 10000)
     }
 
     private fun waitForEspressif(usb: UsbManager, timeoutMs: Long) {
@@ -120,15 +122,10 @@ object UsbRobotLink {
         val pipeOut = PipedOutputStream()
         val pipeIn = PipedInputStream(pipeOut, 64 * 1024)
         val alive = AtomicBoolean(true)
-        var io: SerialInputOutputManager? = null
+        val ioRef = AtomicReference<SerialInputOutputManager?>(null)
 
-        try {
-            port.open(connection)
-            port.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-            port.rts = false
-            port.dtr = true
-
-            io = SerialInputOutputManager(port, object : SerialInputOutputManager.Listener {
+        fun startIo(activePort: UsbSerialPort) {
+            val manager = SerialInputOutputManager(activePort, object : SerialInputOutputManager.Listener {
                 override fun onNewData(data: ByteArray) {
                     if (!alive.get()) return
                     try {
@@ -140,19 +137,27 @@ object UsbRobotLink {
 
                 override fun onRunError(e: Exception?) {
                     Log.i(TAG, "USB IO error: ${e?.message}")
-                    alive.set(false)
-                    try {
-                        pipeOut.close()
-                    } catch (_: Exception) {
-                    }
+                    // Keep the pipe open during connect glitches; RobotClient
+                    // only finishes when the pipe EOF or awaitHello times out.
                 }
             })
-            // Catch hello bytes immediately — firmware repeats them until we speak.
-            io.start()
-            Thread.sleep(500)
+            ioRef.getAndSet(manager)?.stop()
+            manager.start()
+        }
+
+        try {
+            port.open(connection)
+            port.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            // DTR lets many CDC stacks deliver device→host bytes; keep RTS low
+            // so we do not also enter download mode.
+            port.rts = false
+            port.dtr = true
+            startIo(port)
+            // Give the chip time to finish any open-time reset and start hello.
+            Thread.sleep(1200)
         } catch (error: Exception) {
             alive.set(false)
-            io?.stop()
+            ioRef.get()?.stop()
             try {
                 port.close()
             } catch (_: Exception) {
@@ -165,7 +170,6 @@ object UsbRobotLink {
             throw IllegalStateException(error.message ?: "USB serial open failed")
         }
 
-        val manager = io
         val usbOut = object : OutputStream() {
             override fun write(b: Int) {
                 port.write(byteArrayOf(b.toByte()), 2000)
@@ -182,7 +186,7 @@ object UsbRobotLink {
         return try {
             RobotClient.open(pipeIn, usbOut) {
                 alive.set(false)
-                manager?.stop()
+                ioRef.getAndSet(null)?.stop()
                 try {
                     port.dtr = false
                 } catch (_: Exception) {
@@ -206,7 +210,7 @@ object UsbRobotLink {
             }
         } catch (error: Exception) {
             alive.set(false)
-            manager?.stop()
+            ioRef.getAndSet(null)?.stop()
             try {
                 port.close()
             } catch (_: Exception) {

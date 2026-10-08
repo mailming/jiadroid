@@ -4,7 +4,7 @@
 
 void protocolResetSession();
 bool protocolSendHello(Stream &peer);
-// false means the peer violated the framing rules, or the link should close.
+// false means the peer asked to close (session.bye) or the link must drop.
 bool protocolHandleLine(Stream &peer, const char *line);
 bool protocolPollTelemetry(Stream &peer, unsigned long nowMs);
 void protocolOnDisconnect();

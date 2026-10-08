@@ -67,7 +67,22 @@ static bool sendDocument(Stream &peer, JsonDocument &doc) {
     }
     size_t written = serializeJson(doc, out, sizeof(out));
     out[written++] = '\n';
-    return peer.write(reinterpret_cast<const uint8_t *>(out), written) == written;
+    // USB CDC often accepts only part of a buffer; keep sending until done.
+    size_t sent = 0;
+    unsigned long startMs = millis();
+    while (sent < written) {
+        size_t n = peer.write(reinterpret_cast<const uint8_t *>(out + sent), written - sent);
+        if (n > 0) {
+            sent += n;
+            continue;
+        }
+        if ((millis() - startMs) > 500) {
+            return false;
+        }
+        delay(1);
+    }
+    peer.flush();
+    return true;
 }
 
 static void addSafety(JsonObject body) {
@@ -493,8 +508,10 @@ static const char *payloadErrorCode() {
 
 bool protocolHandleLine(Stream &peer, const char *line) {
     JsonDocument req;
+    // USB hosts often spit noise on open. Ignore junk; do not drop the session.
     if (deserializeJson(req, line) != DeserializationError::Ok || !envelopeOk(req)) {
-        return false;
+        logLine("ignored bad line");
+        return true;
     }
     const char *kind = req["kind"].as<const char *>();
     if (strcmp(kind, "req") != 0) {
