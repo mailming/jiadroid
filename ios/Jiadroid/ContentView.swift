@@ -60,7 +60,11 @@ struct ContentView: View {
                     saveWifi: session.saveWifi,
                     flashFirmware: session.flashFirmware
                 )
-                BrainSection(voice: session.voice, use: { session.useBrain(save: true) })
+                BrainSection(
+                    voice: session.voice,
+                    use: { session.useBrain(save: true) },
+                    saveName: session.saveRobotName
+                )
                 Button("Eyes") { setDebug(false) }
                     .buttonStyle(.bordered)
                     .tint(Color.ink)
@@ -326,30 +330,48 @@ private struct LinkSection: View {
 private struct BrainSection: View {
     @ObservedObject var voice: VoiceModel
     let use: () -> Void
+    let saveName: () -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
-            TextField("Model URL, e.g. http://192.168.1.10:11434/v1", text: $voice.brainURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .font(.caption)
-                .fieldStyle()
-            TextField("Model", text: $voice.brainModel)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.caption)
-                .frame(maxWidth: 90)
-                .fieldStyle()
-            SecureField("API key", text: $voice.brainKey)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.caption)
-                .frame(maxWidth: 90)
-                .fieldStyle()
-            Button("Use", action: use)
-                .buttonStyle(.bordered)
-                .tint(Color.ink)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Name")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.muted)
+                TextField("Lulu", text: $voice.robotName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit(saveName)
+                    .frame(maxWidth: 120)
+                    .fieldStyle()
+                Text("Say the name to get its attention")
+                    .font(.caption)
+                    .foregroundStyle(Color.muted)
+            }
+            HStack(spacing: 4) {
+                TextField("Model URL, e.g. http://192.168.1.10:11434/v1", text: $voice.brainURL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .font(.caption)
+                    .fieldStyle()
+                TextField("Model", text: $voice.brainModel)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.caption)
+                    .frame(maxWidth: 90)
+                    .fieldStyle()
+                SecureField("API key", text: $voice.brainKey)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.caption)
+                    .frame(maxWidth: 90)
+                    .fieldStyle()
+                Button("Use", action: use)
+                    .buttonStyle(.bordered)
+                    .tint(Color.ink)
+            }
         }
     }
 }

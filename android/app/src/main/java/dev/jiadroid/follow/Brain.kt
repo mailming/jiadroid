@@ -13,9 +13,10 @@ class Brain(private val baseUrl: String, private val model: String, private val 
     private val history = ArrayDeque<JSONObject>()
 
     /** Blocks on the network. Call it off the main thread. */
-    fun answer(heard: String, seeing: String): String {
+    fun answer(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): String {
+        val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
         val messages = JSONArray()
-        messages.put(message("system", PERSONALITY + "\nRight now your camera says: $seeing."))
+        messages.put(message("system", personality(who) + "\nRight now your camera says: $seeing."))
         history.forEach { messages.put(it) }
         messages.put(message("user", heard))
         val body = JSONObject()
@@ -58,8 +59,10 @@ class Brain(private val baseUrl: String, private val model: String, private val 
 
     private companion object {
         const val HISTORY_TURNS = 12
-        const val PERSONALITY =
-            "You are Jiadroid, a small walking robot whose face is a phone showing a pair of big eyes. " +
+
+        fun personality(who: String) =
+            "You are $who, a small walking robot whose face is a phone showing a pair of big eyes. " +
+                "People get your attention by saying your name first. " +
                 "You follow the person in front of you. You are warm, curious, and playfully funny, " +
                 "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
                 "sentences, with no lists, markdown, or emoji. The app separately executes clear commands " +

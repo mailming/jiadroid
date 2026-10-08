@@ -89,11 +89,15 @@ final class FollowSession: ObservableObject, CameraSink {
         let text = voice.say.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return }
         voice.say = ""
-        voiceSession?.answer(text)
+        voiceSession?.answer(text, requireName: false)
     }
 
     func useBrain(save: Bool) {
         loadBrain(save: save)
+    }
+
+    func saveRobotName() {
+        loadBrain(save: true)
     }
 
     /// Showing the camera preview can reset the microphone. Open it again.
@@ -476,14 +480,19 @@ final class FollowSession: ObservableObject, CameraSink {
     private func loadBrain(save: Bool) {
         let defaults = UserDefaults.standard
         if save {
+            let name = voice.robotName.trimmingCharacters(in: .whitespacesAndNewlines)
+            voice.robotName = name.isEmpty ? defaultRobotName.capitalized : name
+            defaults.set(voice.robotName, forKey: Self.prefRobotName)
             defaults.set(voice.brainURL, forKey: Self.prefBrainURL)
             defaults.set(voice.brainModel, forKey: Self.prefBrainModel)
             defaults.set(voice.brainKey, forKey: Self.prefBrainKey)
         } else {
+            voice.robotName = defaults.string(forKey: Self.prefRobotName) ?? defaultRobotName.capitalized
             voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? ""
             voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? ""
             voice.brainKey = defaults.string(forKey: Self.prefBrainKey) ?? ""
         }
+        voiceSession?.robotName = voice.robotName
         let url = voice.brainURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = voice.brainModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = voice.brainKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -497,6 +506,7 @@ final class FollowSession: ObservableObject, CameraSink {
     }
 
     private static let talkLines = 40
+    private static let prefRobotName = "robot_name"
     private static let prefBrainURL = "brain_url"
     private static let prefBrainModel = "brain_model"
     private static let prefBrainKey = "brain_key"
@@ -542,6 +552,7 @@ final class VoiceModel: ObservableObject {
     @Published var line = "Listening"
     @Published var talkLog = "What you say and what it answers shows here."
     @Published var say = ""
+    @Published var robotName = defaultRobotName.capitalized
     @Published var brainURL = ""
     @Published var brainModel = ""
     @Published var brainKey = ""

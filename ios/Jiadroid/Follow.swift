@@ -254,9 +254,13 @@ enum FollowLogicTests {
         try expect(abs(pose.y - 0.1) < 0.0001, "pose y \(pose.y)")
 
         try expect(
-            reply(heard: "hello there", seeing: "Person is centered") == "Hello. I can see you, and I can hear you.",
+            reply(heard: "hello there", seeing: "Person is centered") == "Hello. I am Lulu. I can see you, and I can hear you.",
             "greeting"
         )
+        try expect(!parseAttention(heard: "what do you see", name: "lulu").addressed, "wake required")
+        let hey = parseAttention(heard: "hey Lulu, stop", name: "lulu")
+        try expect(hey.addressed && hey.utterance == "stop", "wake strips name")
+        try expect(reply(heard: "", seeing: "Person is centered") == "Yes?", "name only")
         try expect(
             reply(heard: "what do you see", seeing: "Person is lost") == "I don't see anyone right now.",
             "lost sight"

@@ -109,13 +109,28 @@ class FollowTest {
 
     @Test
     fun greetingIsSpokenBack() {
-        assertEquals("Hello. I can see you, and I can hear you.", reply("hello there", "Person is centered"))
+        assertEquals(
+            "Hello. I am Lulu. I can see you, and I can hear you.",
+            reply("hello there", "Person is centered"),
+        )
     }
 
     @Test
     fun askingWhatItSeesUsesTheCamera() {
         assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost"))
         assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left"))
+    }
+
+    @Test
+    fun wakeNameIsRequiredBeforeAnswering() {
+        assertFalse(parseAttention("what do you see", "lulu").addressed)
+        val hey = parseAttention("hey Lulu, stop", "lulu")
+        assertTrue(hey.addressed)
+        assertEquals("stop", hey.utterance)
+        val only = parseAttention("Lulu", "lulu")
+        assertTrue(only.addressed)
+        assertEquals("", only.utterance)
+        assertEquals("Yes?", reply("", "Person is centered"))
     }
 
     @Test

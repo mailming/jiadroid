@@ -35,6 +35,12 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 - **Status:** building (core app exists)  
 - Current Android/iOS Follow Me with eyes UI, voice, USB-C/Wi‑Fi link to chassis.
+- Wake name (default **Lulu**, user-assignable) so it only answers when addressed.
+
+### Wake name / attention
+
+- **Status:** building  
+- Ignore ambient talk until someone says the robot’s name (`hey Lulu, …`). Typed Debug lines skip the gate.
 
 ### Voice-command robot butler
 

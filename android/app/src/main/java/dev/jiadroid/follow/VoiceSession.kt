@@ -30,6 +30,7 @@ class VoiceSession(
 ) {
     /** When null, replies come from the phone's own short list. */
     @Volatile var brain: Brain? = null
+    @Volatile var robotName: String = DEFAULT_ROBOT_NAME
     private val thinker = Executors.newSingleThreadExecutor()
     private var model: Model? = null
     private var loading = false
@@ -212,12 +213,23 @@ class VoiceSession(
         onLine("Listening")
     }
 
-    /** Answers [heard] as if it came from the microphone. Typed lines in Debug use this too. */
-    fun answer(heard: String) {
+    /**
+     * Answers [heard]. Microphone lines need the robot's name first; typed Debug
+     * lines pass [requireName]=false so the keyboard can talk without saying it.
+     */
+    fun answer(heard: String, requireName: Boolean = true) {
         if (speaking) return
         if (isNoise(heard)) return
+        val name = normalizeRobotName(robotName)
+        val attention = if (requireName) parseAttention(heard, name) else Attention(true, heard.trim())
+        if (!attention.addressed) return
         onTurn("You", heard)
-        parseVoiceAction(heard)?.let { action ->
+        if (attention.utterance.isEmpty()) {
+            speaking = true
+            speak("Yes?")
+            return
+        }
+        parseVoiceAction(attention.utterance)?.let { action ->
             onAction(action)
             onTurn("Action", action.description)
         }
@@ -225,16 +237,16 @@ class VoiceSession(
         val seen = seeing()
         val brain = brain
         if (brain == null) {
-            speak(reply(heard, seen))
+            speak(reply(attention.utterance, seen, name))
             return
         }
         onLine("Thinking")
         thinker.execute {
             val spoken = try {
-                brain.answer(heard, seen)
+                brain.answer(attention.utterance, seen, name)
             } catch (error: Exception) {
                 activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
-                reply(heard, seen)
+                reply(attention.utterance, seen, name)
             }
             activity.runOnUiThread { speak(spoken) }
         }

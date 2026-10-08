@@ -161,10 +161,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val prefs = getPreferences(MODE_PRIVATE)
+        binding.robotName.setText(prefs.getString(PREF_ROBOT_NAME, DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() }))
         binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, DEFAULT_BRAIN_URL))
         binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, DEFAULT_BRAIN_MODEL))
         binding.brainKey.setText(prefs.getString(PREF_BRAIN_KEY, ""))
         binding.brainUse.setOnClickListener { useBrain(save = true) }
+        binding.robotName.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                useBrain(save = true)
+                true
+            } else {
+                false
+            }
+        }
         useBrain(save = false)
         val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -292,21 +301,26 @@ class MainActivity : AppCompatActivity() {
         if (text.isEmpty()) return
         binding.say.text = null
         hideKeyboard()
-        voice.answer(text)
+        voice.answer(text, requireName = false)
     }
 
     private fun useBrain(save: Boolean) {
+        val name = binding.robotName.text?.toString()?.trim().orEmpty()
+            .ifEmpty { DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() } }
+        binding.robotName.setText(name)
         val url = binding.brainUrl.text?.toString()?.trim().orEmpty()
         val model = binding.brainModel.text?.toString()?.trim().orEmpty()
         val key = binding.brainKey.text?.toString()?.trim().orEmpty()
         if (save) {
             getPreferences(MODE_PRIVATE).edit()
+                .putString(PREF_ROBOT_NAME, name)
                 .putString(PREF_BRAIN_URL, url)
                 .putString(PREF_BRAIN_MODEL, model)
                 .putString(PREF_BRAIN_KEY, key)
                 .apply()
             hideKeyboard()
         }
+        voice.robotName = name
         voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
         binding.brainStatus.text = if (voice.brain == null) {
             getString(R.string.brain_local)
@@ -822,6 +836,7 @@ class MainActivity : AppCompatActivity() {
         private const val SUBJECT_MARKER = "Marker"
         private const val SUBJECT_PERSON = "Person"
         private const val TALK_LINES = 40
+        private const val PREF_ROBOT_NAME = "robot_name"
         private const val PREF_BRAIN_URL = "brain_url"
         private const val PREF_BRAIN_MODEL = "brain_model"
         private const val PREF_BRAIN_KEY = "brain_key"

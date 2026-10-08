@@ -33,6 +33,10 @@
     <string name="talk_empty">What you say and what it answers shows here.</string>
     <string name="say_hint">Type what you would say</string>
     <string name="say">Say</string>
+    <string name="robot_name_label">Name</string>
+    <string name="robot_name_hint">Lulu</string>
+    <string name="robot_name_default">Lulu</string>
+    <string name="robot_name_help">Say the name to get its attention</string>
     <string name="brain_url_hint">Model URL, e.g. https://api.anthropic.com/v1</string>
     <string name="brain_model_hint">Model</string>
     <string name="brain_key_hint">API key</string>

@@ -7,15 +7,16 @@ package dev.jiadroid.follow
  * answers on the device so it can talk with no API key. The function is the
  * only place that reply comes from.
  */
-fun reply(heard: String, seeing: String): String {
+fun reply(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): String {
     val said = heard.trim().replace(Regex("\\s+"), " ")
-    if (said.isEmpty()) return "I didn't catch that."
+    val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
+    if (said.isEmpty()) return "Yes?"
     val lower = said.lowercase()
     if (Regex("""\b(hi|hello|hey)\b""").containsMatchIn(lower)) {
-        return "Hello. I can see you, and I can hear you."
+        return "Hello. I am $who. I can see you, and I can hear you."
     }
     if (lower.contains("who are you") || lower.contains("your name")) {
-        return "I am the phone on the robot. I follow you, and I can talk."
+        return "I am $who, the phone on the robot. Say my name when you want me."
     }
     if (lower.contains("follow")) return "I am following. Stay in front of me."
     if (lower.contains("see") || lower.contains("looking") || lower.contains("where")) {

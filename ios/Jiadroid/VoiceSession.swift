@@ -8,6 +8,7 @@ import Speech
 final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     /// When nil, replies come from the phone's own short list.
     var brain: Brain?
+    var robotName: String = defaultRobotName
 
     private let seeing: () -> String
     private let onLine: (String) -> Void
@@ -72,16 +73,26 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         brain = nil
     }
 
-    /// Answers [heard] as if it came from the microphone. Typed lines in Debug use this too.
-    func answer(_ heard: String) {
+    /// Answers [heard]. Microphone lines need the robot's name first; typed Debug lines pass `requireName: false`.
+    func answer(_ heard: String, requireName: Bool = true) {
         if speaking { return }
         if isNoise(heard) { return }
+        let name = normalizeRobotName(robotName)
+        let attention = requireName ? parseAttention(heard: heard, name: name) : Attention(addressed: true, utterance: heard.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard attention.addressed else { return }
         onTurn("You", heard)
+        if attention.utterance.isEmpty {
+            speaking = true
+            closeMic()
+            speak("Yes?")
+            return
+        }
         speaking = true
         closeMic()
         let seen = seeing()
+        let request = attention.utterance
         guard let brain else {
-            speak(reply(heard: heard, seeing: seen))
+            speak(reply(heard: request, seeing: seen, name: name))
             return
         }
         onLine("Thinking")
@@ -89,10 +100,10 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             guard let self else { return }
             let spoken: String
             do {
-                spoken = try brain.answer(heard: heard, seeing: seen)
+                spoken = try brain.answer(heard: request, seeing: seen, name: name)
             } catch {
                 DispatchQueue.main.async { self.onTurn("Model", "failed: \(error.localizedDescription)") }
-                spoken = reply(heard: heard, seeing: seen)
+                spoken = reply(heard: request, seeing: seen, name: name)
             }
             DispatchQueue.main.async { self.speak(spoken) }
         }
