@@ -8,11 +8,13 @@ import Speech
 final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     /// When nil, replies come from the phone's own short list.
     var brain: Brain?
+    var robotName: String = defaultRobotName
 
     private let seeing: () -> String
     private let onLine: (String) -> Void
     private let onTurn: (String, String) -> Void
     private let onHearing: (String) -> Void
+    private let onEmotion: (Emotion) -> Void
 
     private let audioEngine = AVAudioEngine()
     private let synthesizer = AVSpeechSynthesizer()
@@ -32,12 +34,14 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         seeing: @escaping () -> String,
         onLine: @escaping (String) -> Void,
         onTurn: @escaping (String, String) -> Void,
-        onHearing: @escaping (String) -> Void
+        onHearing: @escaping (String) -> Void,
+        onEmotion: @escaping (Emotion) -> Void
     ) {
         self.seeing = seeing
         self.onLine = onLine
         self.onTurn = onTurn
         self.onHearing = onHearing
+        self.onEmotion = onEmotion
         super.init()
         synthesizer.delegate = self
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -72,27 +76,38 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         brain = nil
     }
 
-    /// Answers [heard] as if it came from the microphone. Typed lines in Debug use this too.
-    func answer(_ heard: String) {
+    /// Answers [heard]. Microphone lines need the robot's name first; typed Debug lines pass `requireName: false`.
+    func answer(_ heard: String, requireName: Bool = true) {
         if speaking { return }
         if isNoise(heard) { return }
+        let name = normalizeRobotName(robotName)
+        let attention = requireName ? parseAttention(heard: heard, name: name) : Attention(addressed: true, utterance: heard.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard attention.addressed else { return }
         onTurn("You", heard)
+        if attention.utterance.isEmpty {
+            speaking = true
+            closeMic()
+            speak(SpokenReply(say: "Yes?", emotion: .curious))
+            return
+        }
         speaking = true
         closeMic()
         let seen = seeing()
+        let request = attention.utterance
         guard let brain else {
-            speak(reply(heard: heard, seeing: seen))
+            speak(reply(heard: request, seeing: seen, name: name))
             return
         }
+        onEmotion(.thinking)
         onLine("Thinking")
         thinker.async { [weak self] in
             guard let self else { return }
-            let spoken: String
+            let spoken: SpokenReply
             do {
-                spoken = try brain.answer(heard: heard, seeing: seen)
+                spoken = try brain.answer(heard: request, seeing: seen, name: name)
             } catch {
                 DispatchQueue.main.async { self.onTurn("Model", "failed: \(error.localizedDescription)") }
-                spoken = reply(heard: heard, seeing: seen)
+                spoken = reply(heard: request, seeing: seen, name: name)
             }
             DispatchQueue.main.async { self.speak(spoken) }
         }
@@ -172,6 +187,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             if reportedDrop {
                 reportedDrop = false
             }
+            onEmotion(.listening)
             onLine("Listening")
             scheduleRestart()
         } catch {
@@ -197,6 +213,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                     answer(text)
                     return
                 }
+                onEmotion(.listening)
                 onHearing(text)
             }
         }
@@ -207,12 +224,13 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    private func speak(_ spoken: String) {
-        onTurn("Me", spoken)
-        onLine(spoken)
+    private func speak(_ spoken: SpokenReply) {
+        onEmotion(spoken.emotion)
+        onTurn("Me", spoken.say)
+        onLine(spoken.say)
         speakGeneration += 1
         let generation = speakGeneration
-        let utterance = AVSpeechUtterance(string: spoken)
+        let utterance = AVSpeechUtterance(string: spoken.say)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         synthesizer.speak(utterance)
@@ -227,6 +245,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         speaking = false
         speakGeneration += 1
         if !alive { return }
+        onEmotion(.listening)
         onLine("Listening")
         listen()
     }

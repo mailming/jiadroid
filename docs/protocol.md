@@ -10,7 +10,7 @@ The Open Duck Mini's 0.1 command, `walk.velocity`, remains as an alias so older 
 
 The protocol is a stream of messages and does not depend on how it is carried. Intended links are Wi-Fi (TCP), Bluetooth (a serial-style stream such as Bluetooth Classic SPP or a BLE UART service), and USB (USB serial). Each carries the same framed messages below.
 
-Version 0.2 implements TCP only. The reference simulator listens on `127.0.0.1:8765`. Use `--host 0.0.0.0` when a phone on the same network should connect.
+Version 0.2 framing is the same on every link. The reference simulator and the stock `main` firmware use TCP (`127.0.0.1:8765`; `--host 0.0.0.0` for a phone on Wi‑Fi). The `feature/usb-c-link` branch also carries the same messages over USB CDC serial between an Android phone and the ESP32-S3. iPhone apps on that branch still use TCP; Apple does not allow the same CDC path.
 
 ## Framing
 
@@ -274,6 +274,34 @@ Request body `{}`. Response body `{"safety": {"state": "estop"}}`.
 ### `safety.clear`
 
 Request body `{}`. Response body `{"safety": {"state": "ready"}}` when a latch was cleared.
+
+### `wifi.status`
+
+Request body `{}`. Response body describes the station link (password is never returned):
+
+```json
+{"configured": true, "ssid": "home", "connected": true, "ip": "192.168.1.50", "rssi": -48}
+```
+
+Chassis firmware also puts the same object on `session.hello` as `wifi`.
+
+### `wifi.set`
+
+Request body `{"ssid": "home", "password": "secret"}`. `ssid` is 1–32 characters; `password` may be empty and at most 64 characters. Response echoes `wifi.status` fields plus `"applied": true`. Credentials are stored in NVS and the robot rejoins that network. Typical first use is over USB from Android; afterward any phone can reach the robot on Wi‑Fi.
+
+### `wifi.clear`
+
+Request body `{}`. Clears stored credentials and disconnects station Wi‑Fi. Response `{"cleared": true, ...status fields...}`.
+
+### `firmware.begin`
+
+Request body `{"size": 416688}` — the exact byte length of the `.bin` that follows. Response `{"ok": true, "size": 416688, "max": ...}`. The client then writes exactly `size` raw bytes on the same stream (not JSON). When the image is verified the robot emits:
+
+```json
+{"v":1,"kind":"evt","op":"firmware.complete","body":{"ok":true,"bytes":416688,"rebooting":true}}
+```
+
+and reboots. Prefer Wi‑Fi for large uploads; USB works but is slower. Requires an OTA partition table on the ESP32.
 
 ## Errors
 

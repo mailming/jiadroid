@@ -14,7 +14,8 @@ struct Limit {
     let high: Double
 }
 
-/// TCP client for protocol 0.2 (and 0.1 robots). Each message is one JSON object and a newline.
+/// Stream client for protocol 0.2 (and 0.1 robots) over TCP (and future USB/BLE pipes).
+/// Each message is one JSON object and a newline.
 ///
 /// On connect the robot says what it is and which robot-level commands it accepts, with
 /// limits. `walk` sends the Follow Me decision as `motion.velocity`, rescaled to those
@@ -28,10 +29,13 @@ final class RobotClient {
     private var closed = false
     private var hello: [String: Any]?
     private let helloWait = DispatchSemaphore(value: 0)
+    private var firmwareDone: [String: Any]?
+    private let firmwareWait = DispatchSemaphore(value: 0)
     private var responses: [String: [String: Any]] = [:]
     private var waits: [String: DispatchSemaphore] = [:]
 
     private static let supportedVersions: Set<String> = ["0.1", "0.2"]
+    private static let helloTimeoutSeconds: TimeInterval = 15
     // Follow Me decides in Open Duck Mini units; `fit` rescales to the connected body.
     private static let duckForward = 0.15
     private static let duckLateral = 0.2
@@ -99,16 +103,21 @@ final class RobotClient {
             throw plain("Can't reach \(host):\(port)")
         }
         client.receive()
-        if client.helloWait.wait(timeout: .now() + 5) == .timedOut {
+        if client.helloWait.wait(timeout: .now() + Self.helloTimeoutSeconds) == .timedOut {
             client.close()
-            throw plain("Simulator did not say hello")
+            throw plain("Robot did not say hello over this link")
         }
         client.lock.lock()
         let message = client.hello
         client.lock.unlock()
-        try client.readHello(message)
-        client.declarePhone()
-        return client
+        do {
+            try client.readHello(message)
+            client.declarePhone()
+            return client
+        } catch {
+            client.close()
+            throw error
+        }
     }
 
     /// Tell the robot what this phone weighs and which dock it is on. A refusal does not drop the link.
@@ -130,6 +139,72 @@ final class RobotClient {
     }
 
     func supports(_ op: String) -> Bool { controls[op] != nil }
+
+    func setWifi(ssid: String, password: String) throws -> [String: Any] {
+        try request("wifi.set", body: ["ssid": ssid, "password": password])
+    }
+
+    func clearWifi() throws -> [String: Any] {
+        try request("wifi.clear", body: [:])
+    }
+
+    func wifiStatus() throws -> [String: Any] {
+        try request("wifi.status", body: [:])
+    }
+
+    /// Stream a firmware.bin after `firmware.begin`. Prefer Wi‑Fi; USB is slower when available.
+    func installFirmware(data: Data, onProgress: ((Int) -> Void)? = nil) throws {
+        guard supports("firmware.begin") else {
+            throw plain("This robot does not accept firmware updates")
+        }
+        guard data.count >= 1024 else {
+            throw plain("Firmware file is too small")
+        }
+        lock.lock()
+        firmwareDone = nil
+        lock.unlock()
+        while firmwareWait.wait(timeout: .now()) == .success {}
+        _ = try request("firmware.begin", body: ["size": data.count], timeout: 8)
+        let chunk = 4096
+        var sent = 0
+        while sent < data.count {
+            if isClosed { throw plain("Robot connection closed during firmware upload") }
+            let end = min(sent + chunk, data.count)
+            let piece = data.subdata(in: sent..<end)
+            let gate = DispatchSemaphore(value: 0)
+            var sendFailed = false
+            connection.send(content: piece, completion: .contentProcessed { error in
+                sendFailed = error != nil
+                gate.signal()
+            })
+            if gate.wait(timeout: .now() + 30) == .timedOut || sendFailed {
+                throw plain("Robot connection closed during firmware upload")
+            }
+            sent = end
+            onProgress?(sent)
+        }
+        if firmwareWait.wait(timeout: .now() + 180) == .timedOut {
+            throw plain(
+                isClosed
+                    ? "Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds."
+                    : "Timed out waiting for firmware.complete"
+            )
+        }
+        lock.lock()
+        let done = firmwareDone
+        lock.unlock()
+        guard let done else {
+            throw plain("Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds.")
+        }
+        if text(done, "kind") == "closed" {
+            throw plain("Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds.")
+        }
+        let body = done["body"] as? [String: Any] ?? [:]
+        if !(body["ok"] as? Bool ?? false) {
+            let message = text(body, "message")
+            throw plain(message.isEmpty ? "Firmware update failed" : message)
+        }
+    }
 
     func walk(_ decision: FollowDecision) throws {
         if let limits = controls["motion.velocity"] {
@@ -185,14 +260,14 @@ final class RobotClient {
     }
 
     private func readHello(_ message: [String: Any]?) throws {
-        guard let message else { throw plain("Simulator did not say hello") }
-        if text(message, "kind") != "evt" { throw plain("Simulator connection closed") }
-        guard let body = message["body"] as? [String: Any] else { throw plain("Simulator hello was empty") }
+        guard let message else { throw plain("Robot did not say hello over this link") }
+        if text(message, "kind") != "evt" { throw plain("Robot connection closed before hello") }
+        guard let body = message["body"] as? [String: Any] else { throw plain("Robot hello was empty") }
         let version = text(body, "version")
         if text(body, "protocol") != "jiadroid" || !Self.supportedVersions.contains(version) {
             throw plain("Not a Jiadroid robot")
         }
-        guard let robot = body["robot"] as? [String: Any] else { throw plain("Simulator hello was empty") }
+        guard let robot = body["robot"] as? [String: Any] else { throw plain("Robot hello was empty") }
         let announced = text(robot, "name")
         name = announced.isEmpty ? "Robot" : announced
         let announcedKind = text(robot, "kind")
@@ -206,11 +281,11 @@ final class RobotClient {
         mounts = parseMounts(body["mounts"] as? [Any])
     }
 
-    private func request(_ op: String, body: [String: Any]) throws -> [String: Any] {
+    private func request(_ op: String, body: [String: Any], timeout: TimeInterval = 2) throws -> [String: Any] {
         lock.lock()
         if closed {
             lock.unlock()
-            throw plain("Simulator connection closed")
+            throw plain("Robot connection closed")
         }
         let id = String(nextID)
         nextID += 1
@@ -224,19 +299,19 @@ final class RobotClient {
         line.append(0x0A)
         connection.send(content: line, completion: .contentProcessed { _ in })
 
-        let timedOut = waiter.wait(timeout: .now() + 2) == .timedOut
+        let timedOut = waiter.wait(timeout: .now() + timeout) == .timedOut
         lock.lock()
         let result = responses.removeValue(forKey: id)
         waits.removeValue(forKey: id)
         lock.unlock()
-        if timedOut || result == nil { throw plain("Timed out waiting for the simulator") }
-        guard let result else { throw plain("Timed out waiting for the simulator") }
+        if timedOut || result == nil { throw plain("Timed out waiting for the robot") }
+        guard let result else { throw plain("Timed out waiting for the robot") }
         if text(result, "kind") == "closed" || text(result, "kind") != "res" {
-            throw plain("Simulator connection closed")
+            throw plain("Robot connection closed")
         }
         if let error = result["error"] as? [String: Any] {
             let reason = text(error, "message")
-            throw RobotError(code: text(error, "code"), message: reason.isEmpty ? "The simulator refused the command" : reason)
+            throw RobotError(code: text(error, "code"), message: reason.isEmpty ? "The robot refused the command" : reason)
         }
         return result["body"] as? [String: Any] ?? [:]
     }
@@ -286,9 +361,9 @@ final class RobotClient {
             var bytes = Data(line)
             if bytes.last == 0x0D { bytes.removeLast() }
             if bytes.isEmpty { continue }
+            // USB/TCP noise or a torn line must not kill the session.
             guard let message = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
-                failAll()
-                return false
+                continue
             }
             let kind = text(message, "kind")
             if kind == "res" {
@@ -299,14 +374,22 @@ final class RobotClient {
                     waits[id]?.signal()
                 }
                 lock.unlock()
-            } else if kind == "evt", text(message, "op") == "session.hello" {
-                lock.lock()
-                if hello == nil {
-                    hello = message
+            } else if kind == "evt" {
+                let op = text(message, "op")
+                if op == "session.hello" {
+                    lock.lock()
+                    if hello == nil {
+                        hello = message
+                        lock.unlock()
+                        helloWait.signal()
+                    } else {
+                        lock.unlock()
+                    }
+                } else if op == "firmware.complete" {
+                    lock.lock()
+                    firmwareDone = message
                     lock.unlock()
-                    helloWait.signal()
-                } else {
-                    lock.unlock()
+                    firmwareWait.signal()
                 }
             }
         }
@@ -322,12 +405,15 @@ final class RobotClient {
         let closedMessage: [String: Any] = ["kind": "closed"]
         let announceHello = hello == nil
         if announceHello { hello = closedMessage }
+        let announceFirmware = firmwareDone == nil
+        if announceFirmware { firmwareDone = closedMessage }
         let pending = waits
         for id in pending.keys {
             responses[id] = closedMessage
         }
         lock.unlock()
         if announceHello { helloWait.signal() }
+        if announceFirmware { firmwareWait.signal() }
         pending.values.forEach { $0.signal() }
     }
 }

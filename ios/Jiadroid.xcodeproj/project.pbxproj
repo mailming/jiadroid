@@ -19,6 +19,9 @@
 		BA000B /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000B /* Conversation.swift */; };
 		BA000D /* Brain.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000D /* Brain.swift */; };
 		BA000E /* VoiceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000E /* VoiceSession.swift */; };
+		BA000F /* UsbRobotLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000F /* UsbRobotLink.swift */; };
+		BA0010 /* Attention.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0010 /* Attention.swift */; };
+		BA0011 /* Emotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0011 /* Emotion.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,6 +48,9 @@
 		FA000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FA000D /* Brain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Brain.swift; sourceTree = "<group>"; };
 		FA000E /* VoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSession.swift; sourceTree = "<group>"; };
+		FA000F /* UsbRobotLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsbRobotLink.swift; sourceTree = "<group>"; };
+		FA0010 /* Attention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attention.swift; sourceTree = "<group>"; };
+		FA0011 /* Emotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Emotion.swift; sourceTree = "<group>"; };
 		FA000A /* FollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowTests.swift; sourceTree = "<group>"; };
 		R00001 /* Jiadroid.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiadroid.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		R00002 /* JiadroidTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JiadroidTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -74,9 +80,12 @@
 				FA0001 /* JiadroidApp.swift */,
 				FA0002 /* Follow.swift */,
 				FA000B /* Conversation.swift */,
+				FA0010 /* Attention.swift */,
+				FA0011 /* Emotion.swift */,
 				FA000D /* Brain.swift */,
 				FA000E /* VoiceSession.swift */,
 				FA0003 /* RobotClient.swift */,
+				FA000F /* UsbRobotLink.swift */,
 				FA0004 /* FollowSession.swift */,
 				FA0005 /* CameraSession.swift */,
 				FA0006 /* ContentView.swift */,
@@ -207,9 +216,12 @@
 				BA0001 /* JiadroidApp.swift in Sources */,
 				BA0002 /* Follow.swift in Sources */,
 				BA000B /* Conversation.swift in Sources */,
+				BA0010 /* Attention.swift in Sources */,
+				BA0011 /* Emotion.swift in Sources */,
 				BA000D /* Brain.swift in Sources */,
 				BA000E /* VoiceSession.swift in Sources */,
 				BA0003 /* RobotClient.swift in Sources */,
+				BA000F /* UsbRobotLink.swift in Sources */,
 				BA0004 /* FollowSession.swift in Sources */,
 				BA0005 /* CameraSession.swift in Sources */,
 				BA0006 /* ContentView.swift in Sources */,
@@ -287,7 +299,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios;
 				PRODUCT_NAME = Jiadroid;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -311,7 +323,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios;
 				PRODUCT_NAME = Jiadroid;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -335,7 +347,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios.tests;
 				PRODUCT_NAME = JiadroidTests;
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -358,7 +370,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1;
+				MARKETING_VERSION = 0.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.jiadroid.ios.tests;
 				PRODUCT_NAME = JiadroidTests;
 				SWIFT_EMIT_LOC_STRINGS = NO;

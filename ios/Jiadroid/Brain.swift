@@ -16,9 +16,10 @@ final class Brain {
     }
 
     /// Blocks on the network. Call it off the main thread.
-    func answer(heard: String, seeing: String) throws -> String {
+    func answer(heard: String, seeing: String, name: String = defaultRobotName) throws -> SpokenReply {
+        let who = normalizeRobotName(name).capitalized
         var messages: [[String: String]] = [
-            ["role": "system", "content": Self.personality + "\nRight now your camera says: \(seeing)."],
+            ["role": "system", "content": Self.personality(who) + "\nRight now your camera says: \(seeing)."],
         ]
         lock.lock()
         messages.append(contentsOf: history)
@@ -71,9 +72,9 @@ final class Brain {
         else {
             throw BrainError.failed("model reply was empty")
         }
-        let spoken = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let spoken = parseSpokenReply(content.trimmingCharacters(in: .whitespacesAndNewlines))
         remember(["role": "user", "content": heard])
-        remember(["role": "assistant", "content": spoken])
+        remember(["role": "assistant", "content": spoken.say])
         return spoken
     }
 
@@ -87,11 +88,16 @@ final class Brain {
     }
 
     private static let historyTurns = 12
-    private static let personality =
-        "You are Jiadroid, a small walking robot whose face is a phone showing a pair of big eyes. " +
-        "You follow the person in front of you. You are warm, curious, and playfully funny, " +
-        "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
-        "sentences, with no lists, markdown, or emoji."
+
+    private static func personality(_ who: String) -> String {
+        "You are \(who), a small walking robot whose face is a phone showing a pair of big eyes. " +
+            "People get your attention by saying your name first. " +
+            "You follow the person in front of you. You are warm, curious, and playfully funny, " +
+            "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
+            "sentences, with no lists, markdown, or emoji. End every reply with exactly one emotion tag " +
+            "from this set: <<neutral>> <<happy>> <<curious>> <<confused>> <<sad>> <<excited>>. " +
+            "Example: Nice to see you. <<happy>>"
+    }
 }
 
 enum BrainError: LocalizedError {

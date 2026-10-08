@@ -1,29 +1,40 @@
 package dev.jiadroid.follow
 
 /**
- * Turns heard speech into a spoken reply.
+ * Turns heard speech into a spoken reply plus a face emotion.
  *
  * Reachy Mini streams the microphone to a realtime language model. This phone
- * answers on the device so it can talk with no API key. The function is the
- * only place that reply comes from.
+ * answers on the device so it can talk with no API key.
  */
-fun reply(heard: String, seeing: String): String {
+fun reply(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): SpokenReply {
     val said = heard.trim().replace(Regex("\\s+"), " ")
-    if (said.isEmpty()) return "I didn't catch that."
+    val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
+    if (said.isEmpty()) return SpokenReply("Yes?", Emotion.CURIOUS)
     val lower = said.lowercase()
     if (Regex("""\b(hi|hello|hey)\b""").containsMatchIn(lower)) {
-        return "Hello. I can see you, and I can hear you."
+        return SpokenReply("Hello. I am $who. I can see you, and I can hear you.", Emotion.HAPPY)
     }
     if (lower.contains("who are you") || lower.contains("your name")) {
-        return "I am the phone on the robot. I follow you, and I can talk."
+        return SpokenReply(
+            "I am $who, the phone on the robot. Say my name when you want me.",
+            Emotion.HAPPY,
+        )
     }
-    if (lower.contains("follow")) return "I am following. Stay in front of me."
+    if (lower.contains("follow")) {
+        return SpokenReply("I am following. Stay in front of me.", Emotion.EXCITED)
+    }
     if (lower.contains("see") || lower.contains("looking") || lower.contains("where")) {
         return if (seeing.contains("lost", ignoreCase = true)) {
-            "I don't see anyone right now."
+            SpokenReply("I don't see anyone right now.", Emotion.CONFUSED)
         } else {
-            "I see someone. $seeing."
+            SpokenReply("I see someone. $seeing.", Emotion.CURIOUS)
         }
     }
-    return "I heard you say $said."
+    if (Regex("""\b(thank|thanks|good job|love you)\b""").containsMatchIn(lower)) {
+        return SpokenReply("You're welcome.", Emotion.HAPPY)
+    }
+    if (Regex("""\b(sad|sorry|hurt|scared)\b""").containsMatchIn(lower)) {
+        return SpokenReply("I'm here with you.", Emotion.SAD)
+    }
+    return SpokenReply("I heard you say $said.", Emotion.NEUTRAL)
 }

@@ -26,10 +26,12 @@ class VoiceSession(
     private val onLine: (String) -> Unit,
     private val onTurn: (who: String, text: String) -> Unit,
     private val onHearing: (String) -> Unit,
+    private val onEmotion: (Emotion) -> Unit,
     private val onAction: (VoiceAction) -> Unit,
 ) {
     /** When null, replies come from the phone's own short list. */
     @Volatile var brain: Brain? = null
+    @Volatile var robotName: String = DEFAULT_ROBOT_NAME
     private val thinker = Executors.newSingleThreadExecutor()
     private var model: Model? = null
     private var loading = false
@@ -116,6 +118,7 @@ class VoiceSession(
         val thread = Thread({ pump() }, "jiadroid-mic")
         listenThread = thread
         thread.start()
+        onEmotion(Emotion.LISTENING)
         onLine("Listening")
     }
 
@@ -137,13 +140,23 @@ class VoiceSession(
             }
             if (reportedDrop) {
                 reportedDrop = false
-                activity.runOnUiThread { if (alive && !speaking) onLine("Listening") }
+                activity.runOnUiThread {
+                    if (alive && !speaking) {
+                        onEmotion(Emotion.LISTENING)
+                        onLine("Listening")
+                    }
+                }
             }
             if (speaking || read == 0) continue
             val heard = accept(buffer, read) ?: continue
             activity.runOnUiThread {
                 if (!alive || speaking) return@runOnUiThread
-                if (heard.partial) onHearing(heard.text) else answer(heard.text)
+                if (heard.partial) {
+                    onEmotion(Emotion.LISTENING)
+                    onHearing(heard.text)
+                } else {
+                    answer(heard.text)
+                }
             }
         }
         closeRecorder()
@@ -209,15 +222,27 @@ class VoiceSession(
         speaking = false
         speakGeneration += 1
         if (!alive) return
+        onEmotion(Emotion.LISTENING)
         onLine("Listening")
     }
 
-    /** Answers [heard] as if it came from the microphone. Typed lines in Debug use this too. */
-    fun answer(heard: String) {
+    /**
+     * Answers [heard]. Microphone lines need the robot's name first; typed Debug
+     * lines pass [requireName]=false so the keyboard can talk without saying it.
+     */
+    fun answer(heard: String, requireName: Boolean = true) {
         if (speaking) return
         if (isNoise(heard)) return
+        val name = normalizeRobotName(robotName)
+        val attention = if (requireName) parseAttention(heard, name) else Attention(true, heard.trim())
+        if (!attention.addressed) return
         onTurn("You", heard)
-        parseVoiceAction(heard)?.let { action ->
+        if (attention.utterance.isEmpty()) {
+            speaking = true
+            speak(SpokenReply("Yes?", Emotion.CURIOUS))
+            return
+        }
+        parseVoiceAction(attention.utterance)?.let { action ->
             onAction(action)
             onTurn("Action", action.description)
         }
@@ -225,28 +250,30 @@ class VoiceSession(
         val seen = seeing()
         val brain = brain
         if (brain == null) {
-            speak(reply(heard, seen))
+            speak(reply(attention.utterance, seen, name))
             return
         }
+        onEmotion(Emotion.THINKING)
         onLine("Thinking")
         thinker.execute {
             val spoken = try {
-                brain.answer(heard, seen)
+                brain.answer(attention.utterance, seen, name)
             } catch (error: Exception) {
                 activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
-                reply(heard, seen)
+                reply(attention.utterance, seen, name)
             }
             activity.runOnUiThread { speak(spoken) }
         }
     }
 
-    private fun speak(spoken: String) {
-        onTurn("Me", spoken)
-        onLine(spoken)
+    private fun speak(spoken: SpokenReply) {
+        onEmotion(spoken.emotion)
+        onTurn("Me", spoken.say)
+        onLine(spoken.say)
         val speaker = speaker
         val generation = ++speakGeneration
         if (!readyToSpeak || speaker == null ||
-            speaker.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "reply") == TextToSpeech.ERROR
+            speaker.speak(spoken.say, TextToSpeech.QUEUE_FLUSH, null, "reply") == TextToSpeech.ERROR
         ) {
             onTurn("Voice", "text to speech is not ready")
             resume()

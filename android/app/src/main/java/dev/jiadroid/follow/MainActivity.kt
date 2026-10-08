@@ -3,6 +3,7 @@ package dev.jiadroid.follow
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.PointF
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,7 @@ import android.util.Size
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.result.contract.ActivityResultContracts
+import android.provider.OpenableColumns
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -93,6 +95,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val pickFirmware = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) flashFirmware(uri)
+    }
+
     private val tick = object : Runnable {
         override fun run() {
             if (!ticking) return
@@ -118,6 +124,17 @@ class MainActivity : AppCompatActivity() {
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
         }
+        binding.connectUsb.setOnClickListener {
+            if (link.get() != null) disconnect() else connectOverUsb()
+        }
+        binding.wifiSave.setOnClickListener { saveRobotWifi() }
+        binding.firmwareFlash.setOnClickListener {
+            if (link.get() == null || link.get()?.supports("firmware.begin") != true) {
+                binding.link.text = getString(R.string.firmware_need_link)
+                return@setOnClickListener
+            }
+            pickFirmware.launch(arrayOf("application/octet-stream", "*/*"))
+        }
         binding.host.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
                 connectToLaptop()
@@ -132,6 +149,7 @@ class MainActivity : AppCompatActivity() {
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
+            onEmotion = { binding.eyes.setEmotion(it) },
             onAction = ::applyVoiceAction,
         )
         binding.saySend.setOnClickListener { sayTyped() }
@@ -144,10 +162,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val prefs = getPreferences(MODE_PRIVATE)
+        binding.robotName.setText(prefs.getString(PREF_ROBOT_NAME, DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() }))
         binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, DEFAULT_BRAIN_URL))
         binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, DEFAULT_BRAIN_MODEL))
         binding.brainKey.setText(prefs.getString(PREF_BRAIN_KEY, ""))
         binding.brainUse.setOnClickListener { useBrain(save = true) }
+        binding.robotName.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                useBrain(save = true)
+                true
+            } else {
+                false
+            }
+        }
         useBrain(save = false)
         val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -275,21 +302,26 @@ class MainActivity : AppCompatActivity() {
         if (text.isEmpty()) return
         binding.say.text = null
         hideKeyboard()
-        voice.answer(text)
+        voice.answer(text, requireName = false)
     }
 
     private fun useBrain(save: Boolean) {
+        val name = binding.robotName.text?.toString()?.trim().orEmpty()
+            .ifEmpty { DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() } }
+        binding.robotName.setText(name)
         val url = binding.brainUrl.text?.toString()?.trim().orEmpty()
         val model = binding.brainModel.text?.toString()?.trim().orEmpty()
         val key = binding.brainKey.text?.toString()?.trim().orEmpty()
         if (save) {
             getPreferences(MODE_PRIVATE).edit()
+                .putString(PREF_ROBOT_NAME, name)
                 .putString(PREF_BRAIN_URL, url)
                 .putString(PREF_BRAIN_MODEL, model)
                 .putString(PREF_BRAIN_KEY, key)
                 .apply()
             hideKeyboard()
         }
+        voice.robotName = name
         voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
         binding.brainStatus.text = if (voice.brain == null) {
             getString(R.string.brain_local)
@@ -367,25 +399,144 @@ class MainActivity : AppCompatActivity() {
         }
         hideKeyboard()
         connecting = true
-        binding.connect.isEnabled = false
+        setLinkButtonsEnabled(false)
         binding.link.text = getString(R.string.connecting)
         val (host, port) = endpoint
         io.execute {
             try {
                 val robot = RobotClient.connect(host, port)
                 handler.post {
-                    connecting = false
-                    binding.connect.isEnabled = true
-                    link.set(robot)
-                    lastCommandKey = null
-                    binding.connect.text = getString(R.string.disconnect)
-                    binding.link.text = getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port)
+                    onLinked(robot, getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port))
                 }
             } catch (error: Exception) {
                 handler.post {
                     connecting = false
-                    binding.connect.isEnabled = true
+                    setLinkButtonsEnabled(true)
                     binding.link.text = error.message ?: getString(R.string.need_address)
+                }
+            }
+        }
+    }
+
+    private fun connectOverUsb() {
+        if (connecting || link.get() != null) return
+        hideKeyboard()
+        connecting = true
+        setLinkButtonsEnabled(false)
+        binding.link.text = getString(R.string.connecting)
+        io.execute {
+            try {
+                val robot = UsbRobotLink.connect(this)
+                handler.post {
+                    onLinked(robot, getString(R.string.connected_usb, robot.name, robot.kind, robot.deviceCount))
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    connecting = false
+                    setLinkButtonsEnabled(true)
+                    binding.link.text = error.message ?: getString(R.string.need_usb)
+                }
+            }
+        }
+    }
+
+    private fun onLinked(robot: RobotClient, status: String) {
+        connecting = false
+        setLinkButtonsEnabled(true)
+        link.set(robot)
+        lastCommandKey = null
+        binding.connect.text = getString(R.string.disconnect)
+        binding.connectUsb.text = getString(R.string.disconnect)
+        binding.link.text = status
+        binding.wifiSave.isEnabled = robot.supports("wifi.set")
+        binding.firmwareFlash.isEnabled = robot.supports("firmware.begin")
+        if (robot.supports("wifi.status")) {
+            io.execute {
+                try {
+                    val wifi = robot.wifiStatus()
+                    val ssid = wifi.optString("ssid")
+                    handler.post {
+                        if (link.get() !== robot) return@post
+                        if (ssid.isNotEmpty()) binding.wifiSsid.setText(ssid)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun setLinkButtonsEnabled(enabled: Boolean) {
+        binding.connect.isEnabled = enabled
+        binding.connectUsb.isEnabled = enabled
+    }
+
+    private fun saveRobotWifi() {
+        val robot = link.get()
+        if (robot == null || !robot.supports("wifi.set")) {
+            binding.link.text = getString(R.string.firmware_need_link)
+            return
+        }
+        val ssid = binding.wifiSsid.text?.toString()?.trim().orEmpty()
+        val password = binding.wifiPassword.text?.toString().orEmpty()
+        if (ssid.isEmpty()) {
+            binding.link.text = getString(R.string.wifi_need_ssid)
+            return
+        }
+        hideKeyboard()
+        binding.wifiSave.isEnabled = false
+        io.execute {
+            try {
+                robot.setWifi(ssid, password)
+                handler.post {
+                    binding.wifiSave.isEnabled = link.get() === robot
+                    binding.link.text = getString(R.string.wifi_saved, ssid)
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    binding.wifiSave.isEnabled = link.get() === robot
+                    binding.link.text = error.message ?: getString(R.string.wifi_need_ssid)
+                }
+            }
+        }
+    }
+
+    private fun flashFirmware(uri: Uri) {
+        val robot = link.get()
+        if (robot == null || !robot.supports("firmware.begin")) {
+            binding.link.text = getString(R.string.firmware_need_link)
+            return
+        }
+        val size = contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else -1L
+        } ?: -1L
+        if (size <= 0L) {
+            binding.link.text = getString(R.string.firmware_need_link)
+            return
+        }
+        binding.firmwareFlash.isEnabled = false
+        binding.wifiSave.isEnabled = false
+        binding.link.text = getString(R.string.firmware_uploading, 0)
+        io.execute {
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    robot.installFirmware(input, size) { sent ->
+                        val pct = ((sent * 100) / size).toInt().coerceIn(0, 100)
+                        handler.post { binding.link.text = getString(R.string.firmware_uploading, pct) }
+                    }
+                } ?: throw IllegalStateException("Can't open the firmware file")
+                handler.post {
+                    disconnect()
+                    binding.link.text = getString(R.string.firmware_done)
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    binding.firmwareFlash.isEnabled = link.get()?.supports("firmware.begin") == true
+                    binding.wifiSave.isEnabled = link.get()?.supports("wifi.set") == true
+                    binding.link.text = error.message ?: getString(R.string.firmware_need_link)
+                    if (link.get() === robot) {
+                        // Upload may have rebooted the board already.
+                        onLinkFailed(robot, error)
+                    }
                 }
             }
         }
@@ -395,6 +546,9 @@ class MainActivity : AppCompatActivity() {
         val robot = link.getAndSet(null)
         lastCommandKey = null
         binding.connect.text = getString(R.string.connect)
+        binding.connectUsb.text = getString(R.string.connect_usb)
+        binding.wifiSave.isEnabled = false
+        binding.firmwareFlash.isEnabled = false
         binding.link.text = getString(R.string.link_idle)
         if (robot != null) release(robot)
     }
@@ -413,9 +567,12 @@ class MainActivity : AppCompatActivity() {
         if (!link.compareAndSet(robot, null)) return
         lastCommandKey = null
         binding.connect.text = getString(R.string.connect)
+        binding.connectUsb.text = getString(R.string.connect_usb)
+        binding.wifiSave.isEnabled = false
+        binding.firmwareFlash.isEnabled = false
         binding.link.text = error.message ?: getString(R.string.link_idle)
         release(robot)
-        Log.i(TAG, "simulator link closed", error)
+        Log.i(TAG, "robot link closed", error)
     }
 
     private fun parseEndpoint(text: String): Pair<String, Int>? {
@@ -680,6 +837,7 @@ class MainActivity : AppCompatActivity() {
         private const val SUBJECT_MARKER = "Marker"
         private const val SUBJECT_PERSON = "Person"
         private const val TALK_LINES = 40
+        private const val PREF_ROBOT_NAME = "robot_name"
         private const val PREF_BRAIN_URL = "brain_url"
         private const val PREF_BRAIN_MODEL = "brain_model"
         private const val PREF_BRAIN_KEY = "brain_key"

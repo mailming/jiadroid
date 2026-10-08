@@ -74,5 +74,6 @@ dependencies {
     implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("net.java.dev.jna:jna:5.18.1@aar")
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
     testImplementation("junit:junit:4.13.2")
 }

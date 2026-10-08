@@ -3,7 +3,9 @@ package dev.jiadroid.follow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.InputStream
 import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -18,14 +20,19 @@ class RobotException(val code: String, message: String) : Exception(message)
 data class Limit(val low: Double, val high: Double)
 
 /**
- * TCP client for protocol 0.2 (and 0.1 robots). Each message is one JSON object and a newline.
+ * Stream client for protocol 0.2 (and 0.1 robots) over TCP or USB serial.
+ * Each message is one JSON object and a newline.
  *
  * On connect the robot says what it is and which robot-level commands it accepts, with
  * limits. `walk` then sends the Follow Me decision as `motion.velocity`, rescaled to the
  * robot's limits, plus `head.pose` if the robot has a head. A 0.1 duck still gets the
  * old `walk.velocity`.
  */
-class RobotClient private constructor(private val socket: Socket) {
+class RobotClient private constructor(
+    private val input: InputStream,
+    private val output: OutputStream,
+    private val onClose: () -> Unit = {},
+) {
     var name: String = ""
         private set
     var kind: String = "other"
@@ -52,9 +59,65 @@ class RobotClient private constructor(private val socket: Socket) {
     private val ids = AtomicInteger(1)
     private val pending = ConcurrentHashMap<String, LinkedBlockingQueue<JSONObject>>()
     private val hello = LinkedBlockingQueue<JSONObject>()
+    private val firmwareDone = LinkedBlockingQueue<JSONObject>(1)
     private val thread = Thread(::readLoop, "jiadroid-read")
 
     fun supports(op: String): Boolean = controls.containsKey(op)
+
+    fun setWifi(ssid: String, password: String): JSONObject {
+        val body = JSONObject()
+        body.put("ssid", ssid)
+        body.put("password", password)
+        return request("wifi.set", body, 5000)
+    }
+
+    fun clearWifi(): JSONObject = request("wifi.clear", JSONObject(), 5000)
+
+    fun wifiStatus(): JSONObject = request("wifi.status", JSONObject(), 5000)
+
+    /**
+     * Stream a firmware.bin after [firmware.begin]. Prefer Wi‑Fi; USB works but is slower.
+     * The robot reboots on success — this link will drop.
+     */
+    fun installFirmware(input: java.io.InputStream, size: Long, onProgress: (Long) -> Unit = {}) {
+        if (!supports("firmware.begin")) {
+            throw IllegalStateException("This robot does not accept firmware updates")
+        }
+        if (size < 1024) throw IllegalStateException("Firmware file is too small")
+        firmwareDone.clear()
+        val begin = JSONObject()
+        begin.put("size", size)
+        request("firmware.begin", begin, 8000)
+        val buffer = ByteArray(4096)
+        var sent = 0L
+        synchronized(writeLock) {
+            while (sent < size) {
+                if (closed.get()) throw IllegalStateException("Robot connection closed during firmware upload")
+                val want = minOf(buffer.size.toLong(), size - sent).toInt()
+                val n = input.read(buffer, 0, want)
+                if (n <= 0) throw IllegalStateException("Firmware file ended early")
+                output.write(buffer, 0, n)
+                sent += n
+                onProgress(sent)
+            }
+            output.flush()
+        }
+        val done = firmwareDone.poll(180, TimeUnit.SECONDS)
+            ?: throw IllegalStateException(
+                if (closed.get()) {
+                    "Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds."
+                } else {
+                    "Timed out waiting for firmware.complete"
+                },
+            )
+        if (done.optString("kind") == "closed") {
+            throw IllegalStateException("Connection closed after upload — the robot may be rebooting. Reconnect in a few seconds.")
+        }
+        val body = done.optJSONObject("body") ?: JSONObject()
+        if (!body.optBoolean("ok", false)) {
+            throw IllegalStateException(body.optString("message").ifEmpty { "Firmware update failed" })
+        }
+    }
 
     fun walk(decision: FollowDecision) {
         if (supports("motion.velocity")) {
@@ -99,7 +162,15 @@ class RobotClient private constructor(private val socket: Socket) {
         } catch (_: Exception) {
         }
         try {
-            socket.close()
+            input.close()
+        } catch (_: Exception) {
+        }
+        try {
+            output.close()
+        } catch (_: Exception) {
+        }
+        try {
+            onClose()
         } catch (_: Exception) {
         }
         thread.join(1000)
@@ -112,18 +183,18 @@ class RobotClient private constructor(private val socket: Socket) {
 
     private fun awaitHello(timeoutMs: Long) {
         val message = hello.poll(timeoutMs, TimeUnit.MILLISECONDS)
-            ?: throw IllegalStateException("Simulator did not say hello")
+            ?: throw IllegalStateException("Robot did not say hello over this link")
         if (message.optString("kind") != "evt") {
-            throw IllegalStateException("Simulator connection closed")
+            throw IllegalStateException("Robot connection closed before hello")
         }
         val body = message.optJSONObject("body")
-            ?: throw IllegalStateException("Simulator hello was empty")
+            ?: throw IllegalStateException("Robot hello was empty")
         val version = body.optString("version")
         if (body.optString("protocol") != "jiadroid" || version !in SUPPORTED_VERSIONS) {
             throw IllegalStateException("Not a Jiadroid robot")
         }
         val robot = body.optJSONObject("robot")
-            ?: throw IllegalStateException("Simulator hello was empty")
+            ?: throw IllegalStateException("Robot hello was empty")
         name = robot.optString("name").ifEmpty { "Robot" }
         kind = robot.optString("kind").ifEmpty { if (version == "0.1") "biped" else "other" }
         safety = body.optJSONObject("safety")?.optString("state")?.ifEmpty { "ready" } ?: "ready"
@@ -197,21 +268,29 @@ class RobotClient private constructor(private val socket: Socket) {
     private fun write(message: JSONObject) {
         val bytes = (message.toString() + "\n").toByteArray(Charsets.UTF_8)
         synchronized(writeLock) {
-            socket.getOutputStream().write(bytes)
-            socket.getOutputStream().flush()
+            output.write(bytes)
+            output.flush()
         }
     }
 
     private fun readLoop() {
         try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+            val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8))
             while (!closed.get()) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) continue
-                val message = JSONObject(line)
+                val message = try {
+                    JSONObject(line)
+                } catch (_: Exception) {
+                    // USB noise or a torn hello must not kill the session.
+                    continue
+                }
                 when (message.optString("kind")) {
                     "res" -> pending[message.optString("id")]?.offer(message)
-                    "evt" -> if (message.optString("op") == "session.hello") hello.offer(message)
+                    "evt" -> when (message.optString("op")) {
+                        "session.hello" -> hello.offer(message)
+                        "firmware.complete" -> firmwareDone.offer(message)
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -239,10 +318,19 @@ class RobotClient private constructor(private val socket: Socket) {
                 socket.close()
                 throw IllegalStateException("Can't reach $host:$port")
             }
-            val client = RobotClient(socket)
+            return open(socket.getInputStream(), socket.getOutputStream()) {
+                try {
+                    socket.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        fun open(input: InputStream, output: OutputStream, onClose: () -> Unit = {}): RobotClient {
+            val client = RobotClient(input, output, onClose)
             try {
                 client.start()
-                client.awaitHello(5000)
+                client.awaitHello(15000)
                 client.declarePhone()
             } catch (error: Exception) {
                 client.close()
