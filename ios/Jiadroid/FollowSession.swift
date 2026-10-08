@@ -111,6 +111,14 @@ final class FollowSession: ObservableObject, CameraSink {
         }
     }
 
+    func toggleUsb() {
+        if robot != nil {
+            disconnect()
+        } else {
+            connectOverUsb()
+        }
+    }
+
     func cameraDidMeasure(_ sighting: Sighting) {
         if sighting.subject == "Person", subject == "Marker", sim.scene.visible, Date().timeIntervalSince(lastMarkerAt) < 0.4 {
             return
@@ -220,7 +228,7 @@ final class FollowSession: ObservableObject, CameraSink {
     private func connect() {
         if link.connecting || robot != nil { return }
         guard let endpoint = parseEndpoint(link.host) else {
-            link.linkText = "Enter the laptop address, or use the phone simulator alone."
+            link.linkText = "Enter a Wi‑Fi address, tap USB for cable guidance, or use the phone simulator alone."
             return
         }
         link.connecting = true
@@ -236,11 +244,10 @@ final class FollowSession: ObservableObject, CameraSink {
                         robot.close()
                         return
                     }
-                    self.link.connecting = false
-                    self.setRobot(robot)
-                    self.lastCommandKey = nil
-                    self.link.connected = true
-                    self.link.linkText = "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices at \(host):\(port)"
+                    self.onLinked(
+                        robot,
+                        "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices at \(host):\(port)"
+                    )
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -252,11 +259,49 @@ final class FollowSession: ObservableObject, CameraSink {
         }
     }
 
+    private func connectOverUsb() {
+        if link.connecting || robot != nil { return }
+        link.connecting = true
+        link.linkText = "Connecting…"
+        connectGeneration += 1
+        let generation = connectGeneration
+        io.async { [weak self] in
+            do {
+                let robot = try UsbRobotLink.connect()
+                DispatchQueue.main.async {
+                    guard let self, self.connectGeneration == generation else {
+                        robot.close()
+                        return
+                    }
+                    self.onLinked(
+                        robot,
+                        "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices over USB‑C"
+                    )
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self, self.connectGeneration == generation else { return }
+                    self.link.connecting = false
+                    self.link.linkText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func onLinked(_ robot: RobotClient, _ status: String) {
+        link.connecting = false
+        setRobot(robot)
+        lastCommandKey = nil
+        link.connected = true
+        link.linkText = status
+    }
+
     private func disconnect() {
         connectGeneration += 1
         let robot = swapRobot(nil)
         lastCommandKey = nil
         link.connected = false
+        link.connecting = false
         link.linkText = "Not connected. The duck above still follows what the camera sees."
         if let robot { release(robot) }
     }

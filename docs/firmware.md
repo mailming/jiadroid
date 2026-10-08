@@ -135,7 +135,7 @@ Debug logs (including `cmd motion.velocity …`) print on the **UART/COM** port 
 
 ### Optional Wi‑Fi fallback
 
-Set `WIFI_SSID` / `WIFI_PASSWORD` in `config.h`, flash, and watch COM for `Listening on …:8765`. In the app, enter that address and tap **Connect** (not USB). iPhone can use Wi‑Fi only; USB serial is Android on this branch.
+Set `WIFI_SSID` / `WIFI_PASSWORD` in `config.h`, flash, and watch COM for `Listening on …:8765`. In either phone app, enter that address and tap **Connect** (not USB). The iOS app also has a **USB** button; it explains that Apple blocks CDC serial to this DevKit and points you at Wi‑Fi.
 
 ```bash
 python -c "from jiadroid import connect; robot = connect('tcp://192.168.1.50:8765'); print(robot.kind, robot.name); robot.move(forward=0.1); robot.stop(); robot.close()"
@@ -159,7 +159,7 @@ The bump switch cuts the part of the command that would drive into it. The phone
 
 ## What it does not do
 
-- iPhone over USB. Apple does not allow casual USB‑serial to this DevKit; use Wi‑Fi for iPhone.
+- iPhone over USB serial. Apple does not expose CDC to iPhone apps for this DevKit; use Wi‑Fi (the iOS **USB** button says so).
 - Bluetooth. Not implemented on this branch.
 - The Open Duck Mini. The duck's ESP32 link, the one that would write `motion.velocity` into the walk policy, is still unwritten.
 - A proven bring-up on the real plate. The project compiles here. Wheel direction, encoder direction, and the measured size of the plate still have to be checked on the hardware, then set in `config.h`.

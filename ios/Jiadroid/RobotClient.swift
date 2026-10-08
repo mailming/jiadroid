@@ -14,7 +14,8 @@ struct Limit {
     let high: Double
 }
 
-/// TCP client for protocol 0.2 (and 0.1 robots). Each message is one JSON object and a newline.
+/// Stream client for protocol 0.2 (and 0.1 robots) over TCP (and future USB/BLE pipes).
+/// Each message is one JSON object and a newline.
 ///
 /// On connect the robot says what it is and which robot-level commands it accepts, with
 /// limits. `walk` sends the Follow Me decision as `motion.velocity`, rescaled to those
@@ -32,6 +33,7 @@ final class RobotClient {
     private var waits: [String: DispatchSemaphore] = [:]
 
     private static let supportedVersions: Set<String> = ["0.1", "0.2"]
+    private static let helloTimeoutSeconds: TimeInterval = 15
     // Follow Me decides in Open Duck Mini units; `fit` rescales to the connected body.
     private static let duckForward = 0.15
     private static let duckLateral = 0.2
@@ -99,16 +101,21 @@ final class RobotClient {
             throw plain("Can't reach \(host):\(port)")
         }
         client.receive()
-        if client.helloWait.wait(timeout: .now() + 5) == .timedOut {
+        if client.helloWait.wait(timeout: .now() + Self.helloTimeoutSeconds) == .timedOut {
             client.close()
-            throw plain("Simulator did not say hello")
+            throw plain("Robot did not say hello over this link")
         }
         client.lock.lock()
         let message = client.hello
         client.lock.unlock()
-        try client.readHello(message)
-        client.declarePhone()
-        return client
+        do {
+            try client.readHello(message)
+            client.declarePhone()
+            return client
+        } catch {
+            client.close()
+            throw error
+        }
     }
 
     /// Tell the robot what this phone weighs and which dock it is on. A refusal does not drop the link.
@@ -185,14 +192,14 @@ final class RobotClient {
     }
 
     private func readHello(_ message: [String: Any]?) throws {
-        guard let message else { throw plain("Simulator did not say hello") }
-        if text(message, "kind") != "evt" { throw plain("Simulator connection closed") }
-        guard let body = message["body"] as? [String: Any] else { throw plain("Simulator hello was empty") }
+        guard let message else { throw plain("Robot did not say hello over this link") }
+        if text(message, "kind") != "evt" { throw plain("Robot connection closed before hello") }
+        guard let body = message["body"] as? [String: Any] else { throw plain("Robot hello was empty") }
         let version = text(body, "version")
         if text(body, "protocol") != "jiadroid" || !Self.supportedVersions.contains(version) {
             throw plain("Not a Jiadroid robot")
         }
-        guard let robot = body["robot"] as? [String: Any] else { throw plain("Simulator hello was empty") }
+        guard let robot = body["robot"] as? [String: Any] else { throw plain("Robot hello was empty") }
         let announced = text(robot, "name")
         name = announced.isEmpty ? "Robot" : announced
         let announcedKind = text(robot, "kind")
@@ -234,9 +241,9 @@ final class RobotClient {
         if text(result, "kind") == "closed" || text(result, "kind") != "res" {
             throw plain("Simulator connection closed")
         }
-        if let error = result["error"] as? [String: Any] {
+            if let error = result["error"] as? [String: Any] {
             let reason = text(error, "message")
-            throw RobotError(code: text(error, "code"), message: reason.isEmpty ? "The simulator refused the command" : reason)
+            throw RobotError(code: text(error, "code"), message: reason.isEmpty ? "The robot refused the command" : reason)
         }
         return result["body"] as? [String: Any] ?? [:]
     }
@@ -286,9 +293,9 @@ final class RobotClient {
             var bytes = Data(line)
             if bytes.last == 0x0D { bytes.removeLast() }
             if bytes.isEmpty { continue }
+            // USB/TCP noise or a torn line must not kill the session.
             guard let message = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else {
-                failAll()
-                return false
+                continue
             }
             let kind = text(message, "kind")
             if kind == "res" {

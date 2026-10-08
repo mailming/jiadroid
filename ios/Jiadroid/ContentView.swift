@@ -52,7 +52,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 StatusSection(status: session.status)
                 DuckSection(sim: session.sim)
-                LinkSection(link: session.link, toggle: session.toggleLink)
+                LinkSection(link: session.link, toggle: session.toggleLink, toggleUsb: session.toggleUsb)
                 BrainSection(voice: session.voice, use: { session.useBrain(save: true) })
                 Button("Eyes") { setDebug(false) }
                     .buttonStyle(.bordered)
@@ -232,20 +232,25 @@ private struct DuckSection: View {
 private struct LinkSection: View {
     @ObservedObject var link: LinkModel
     let toggle: () -> Void
+    let toggleUsb: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                TextField("Laptop address, optional", text: $link.host)
+                TextField("Wi‑Fi host:port, or leave blank for USB", text: $link.host)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .submitLabel(.done)
                     .onSubmit(toggle)
                     .fieldStyle()
-                Button(link.connecting ? "Connecting…" : (link.connected ? "Disconnect" : "Connect"), action: toggle)
+                Button(link.connecting ? "…" : (link.connected ? "Disconnect" : "Connect"), action: toggle)
                     .disabled(link.connecting)
                     .buttonStyle(.borderedProminent)
+                    .tint(Color.ink)
+                Button(link.connecting ? "…" : (link.connected ? "Disconnect" : "USB"), action: toggleUsb)
+                    .disabled(link.connecting)
+                    .buttonStyle(.bordered)
                     .tint(Color.ink)
             }
             HStack(spacing: 8) {

@@ -10,7 +10,7 @@ The Open Duck Mini's 0.1 command, `walk.velocity`, remains as an alias so older 
 
 The protocol is a stream of messages and does not depend on how it is carried. Intended links are Wi-Fi (TCP), Bluetooth (a serial-style stream such as Bluetooth Classic SPP or a BLE UART service), and USB (USB serial). Each carries the same framed messages below.
 
-Version 0.2 framing is the same on every link. The reference simulator and the stock `main` firmware use TCP (`127.0.0.1:8765`; `--host 0.0.0.0` for a phone on Wi‑Fi). The `feature/usb-c-link` branch also carries the same messages over USB CDC serial between an Android phone and the ESP32-S3.
+Version 0.2 framing is the same on every link. The reference simulator and the stock `main` firmware use TCP (`127.0.0.1:8765`; `--host 0.0.0.0` for a phone on Wi‑Fi). The `feature/usb-c-link` branch also carries the same messages over USB CDC serial between an Android phone and the ESP32-S3. iPhone apps on that branch still use TCP; Apple does not allow the same CDC path.
 
 ## Framing
 
