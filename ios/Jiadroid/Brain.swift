@@ -39,8 +39,13 @@ final class Brain {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty {
+            request.setValue("Bearer \(trimmedKey)", forHTTPHeaderField: "Authorization")
+            if baseURL.lowercased().contains("anthropic") {
+                request.setValue(trimmedKey, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            }
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -91,7 +96,7 @@ final class Brain {
 
     private static func personality(_ who: String) -> String {
         "You are \(who), a small walking robot whose face is a phone showing a pair of big eyes. " +
-            "People get your attention by saying your name first. " +
+            "People say your name to start talking with you. " +
             "You follow the person in front of you. You are warm, curious, and playfully funny, " +
             "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
             "sentences, with no lists, markdown, or emoji. End every reply with exactly one emotion tag " +

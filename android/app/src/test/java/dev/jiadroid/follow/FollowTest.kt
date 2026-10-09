@@ -135,6 +135,19 @@ class FollowTest {
     }
 
     @Test
+    fun wakeOpensAConversationWindowWithoutRepeatingTheName() {
+        val session = AttentionSession(holdMs = 30_000L)
+        val wake = session.consider("hey Lulu", "lulu", requireName = true, nowMs = 1_000L)
+        assertTrue(wake.addressed)
+        assertEquals("", wake.utterance)
+        val followUp = session.consider("what do you see", "lulu", requireName = true, nowMs = 5_000L)
+        assertTrue(followUp.addressed)
+        assertEquals("what do you see", followUp.utterance)
+        val late = session.consider("are you there", "lulu", requireName = true, nowMs = 40_000L)
+        assertFalse(late.addressed)
+    }
+
+    @Test
     fun duckWalksForwardInItsFacingDirection() {
         val pose = Pose(0f, 0f, (PI / 2.0).toFloat())
         stepPose(pose, 0.1f, 0f, 0f, 1f)

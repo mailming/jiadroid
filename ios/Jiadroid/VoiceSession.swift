@@ -29,6 +29,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private var reportedDrop = false
     private var tapInstalled = false
     private var restartWork: DispatchWorkItem?
+    private let attention = AttentionSession()
 
     init(
         seeing: @escaping () -> String,
@@ -57,6 +58,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         alive = false
         speaking = false
         speakGeneration += 1
+        attention.clear()
         restartWork?.cancel()
         restartWork = nil
         closeMic()
@@ -76,15 +78,16 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         brain = nil
     }
 
-    /// Answers [heard]. Microphone lines need the robot's name first; typed Debug lines pass `requireName: false`.
+    /// Answers [heard]. Mic lines need the robot's name once to open a short conversation window;
+    /// later turns keep going until ~30s of silence. Typed Debug lines pass `requireName: false`.
     func answer(_ heard: String, requireName: Bool = true) {
         if speaking { return }
         if isNoise(heard) { return }
         let name = normalizeRobotName(robotName)
-        let attention = requireName ? parseAttention(heard: heard, name: name) : Attention(addressed: true, utterance: heard.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard attention.addressed else { return }
+        let gate = attention.consider(heard: heard, name: name, requireName: requireName)
+        guard gate.addressed else { return }
         onTurn("You", heard)
-        if attention.utterance.isEmpty {
+        if gate.utterance.isEmpty {
             speaking = true
             closeMic()
             speak(SpokenReply(say: "Yes?", emotion: .curious))
@@ -93,7 +96,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         speaking = true
         closeMic()
         let seen = seeing()
-        let request = attention.utterance
+        let request = gate.utterance
         guard let brain else {
             speak(reply(heard: request, seeing: seen, name: name))
             return

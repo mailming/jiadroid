@@ -502,7 +502,9 @@ final class FollowSession: ObservableObject, CameraSink {
             voice.brainStatus = "Replies come from the phone. Add a model URL for real conversation."
         } else {
             voiceSession?.brain = Brain(baseURL: url, model: model, key: key)
-            voice.brainStatus = "Replies come from \(model) at \(url)."
+            voice.brainStatus = key.isEmpty
+                ? "Model URL is set, but the API key field is empty. Paste the key here (a Mac shell export does not reach the phone), then tap Use."
+                : "Replies come from \(model) at \(url)."
         }
     }
 

@@ -463,7 +463,7 @@ private struct BrainSection: View {
                     .onSubmit(saveName)
                     .frame(maxWidth: 120)
                     .fieldStyle()
-                Text("Say the name to get its attention")
+                Text("Say the name once; it keeps listening for about 30 seconds")
                     .font(.caption)
                     .foregroundStyle(Color.muted)
             }

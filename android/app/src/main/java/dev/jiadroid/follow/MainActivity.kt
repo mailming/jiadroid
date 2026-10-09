@@ -323,10 +323,10 @@ class MainActivity : AppCompatActivity() {
         }
         voice.robotName = name
         voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
-        binding.brainStatus.text = if (voice.brain == null) {
-            getString(R.string.brain_local)
-        } else {
-            getString(R.string.brain_on, model, url)
+        binding.brainStatus.text = when {
+            voice.brain == null -> getString(R.string.brain_local)
+            key.isEmpty() -> getString(R.string.brain_need_key)
+            else -> getString(R.string.brain_on, model, url)
         }
     }
 

@@ -3,6 +3,7 @@ package dev.jiadroid.follow
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -45,6 +46,7 @@ class VoiceSession(
     private var speakGeneration = 0
     private var reportedDrop = false
     private val micLock = Any()
+    private val attention = AttentionSession()
 
     init {
         speaker = TextToSpeech(activity) { status ->
@@ -83,6 +85,7 @@ class VoiceSession(
         alive = false
         speaking = false
         speakGeneration += 1
+        attention.clear()
         closeRecorder()
         listenThread?.join(500)
         listenThread = null
@@ -227,22 +230,23 @@ class VoiceSession(
     }
 
     /**
-     * Answers [heard]. Microphone lines need the robot's name first; typed Debug
+     * Answers [heard]. Microphone lines need the robot's name once to open a short
+     * conversation window; later turns keep going until ~30s of silence. Typed Debug
      * lines pass [requireName]=false so the keyboard can talk without saying it.
      */
     fun answer(heard: String, requireName: Boolean = true) {
         if (speaking) return
         if (isNoise(heard)) return
         val name = normalizeRobotName(robotName)
-        val attention = if (requireName) parseAttention(heard, name) else Attention(true, heard.trim())
-        if (!attention.addressed) return
+        val gate = attention.consider(heard, name, requireName, SystemClock.elapsedRealtime())
+        if (!gate.addressed) return
         onTurn("You", heard)
-        if (attention.utterance.isEmpty()) {
+        if (gate.utterance.isEmpty()) {
             speaking = true
             speak(SpokenReply("Yes?", Emotion.CURIOUS))
             return
         }
-        parseVoiceAction(attention.utterance)?.let { action ->
+        parseVoiceAction(gate.utterance)?.let { action ->
             onAction(action)
             onTurn("Action", action.description)
         }
@@ -250,17 +254,17 @@ class VoiceSession(
         val seen = seeing()
         val brain = brain
         if (brain == null) {
-            speak(reply(attention.utterance, seen, name))
+            speak(reply(gate.utterance, seen, name))
             return
         }
         onEmotion(Emotion.THINKING)
         onLine("Thinking")
         thinker.execute {
             val spoken = try {
-                brain.answer(attention.utterance, seen, name)
+                brain.answer(gate.utterance, seen, name)
             } catch (error: Exception) {
                 activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
-                reply(attention.utterance, seen, name)
+                reply(gate.utterance, seen, name)
             }
             activity.runOnUiThread { speak(spoken) }
         }

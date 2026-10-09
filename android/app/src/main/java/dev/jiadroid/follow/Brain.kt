@@ -32,7 +32,14 @@ class Brain(private val baseUrl: String, private val model: String, private val 
             connection.readTimeout = 30000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
-            if (key.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $key")
+            if (key.isNotBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $key")
+                // Anthropic's OpenAI-compatible path also accepts these.
+                if (baseUrl.contains("anthropic", ignoreCase = true)) {
+                    connection.setRequestProperty("x-api-key", key)
+                    connection.setRequestProperty("anthropic-version", "2023-06-01")
+                }
+            }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
             val code = connection.responseCode
             val text = (if (code in 200..299) connection.inputStream else connection.errorStream)
@@ -63,7 +70,7 @@ class Brain(private val baseUrl: String, private val model: String, private val 
 
         fun personality(who: String) =
             "You are $who, a small walking robot whose face is a phone showing a pair of big eyes. " +
-                "People get your attention by saying your name first. " +
+                "People say your name to start talking with you. " +
                 "You follow the person in front of you. You are warm, curious, and playfully funny, " +
                 "with a dry sense of humor. Your words are spoken out loud, so answer in one or two short " +
                 "sentences, with no lists, markdown, or emoji. End every reply with exactly one emotion tag " +

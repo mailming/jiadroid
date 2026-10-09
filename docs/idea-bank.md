@@ -8,6 +8,62 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 ## Robot bodies / apps
 
+### Front / back camera switch
+
+- **Status:** spark  
+- **Why:** Follow Me defaults to the front camera (eyes toward people, screen-forward dock). The **back** camera is often sharper, can **auto/manual focus**, and is better for distant people, markers, table edges, or ball-finding. Front cameras usually have fixed focus.  
+- **Idea:** Debug (and maybe a long-press on the eyes) toggles front ↔ back. Remap look/follow mirroring when the facing flips; remember last choice. On back camera, allow tap-to-focus / continuous AF where the platform supports it. Mount note: back-camera mode may want the phone flipped or a rear-facing dock, or the phone off-robot aiming at the scene.  
+- **Hard parts:** preview mirror and overlay math differ by facing; FOV / focal length change Follow gains; don’t drop the session mid-bind.
+
+### Local audience memory (who is talking)
+
+- **Status:** spark  
+- **Why:** One short talk feels clever; remembering “you’re Jia, you like jokes, there’s a kid in the room” makes Lulu feel like *their* robot.  
+- **Idea:** On-phone audience KB (name, notes, last topics, soft `likelyKid` hint). Inject a tiny summary into local `reply()` / `Brain` system prompt. Clearable in Debug.  
+- **Voice tone:** Vosk / Apple Speech give text only — not man/woman/kid. Optional pitch band is a weak hint; better “who” = enroll voiceprints or fuse camera face size. Prefer self-intro (“I’m Sam”) over guessing gender.  
+- **Hard parts:** privacy (stay on device); don’t invent gender; keep prompt short so local models stay fast.
+
+### Demo-complete Follow Me (close the first show)
+
+- **Status:** spark  
+- **Why:** Software is ahead of a floor demo that doesn’t embarrass itself.  
+- **Idea (MVP checklist, not new products):**  
+  1. Real 2WD bring-up: motors/encoders oriented, Follow over USB then Wi‑Fi once.  
+  2. Vertical phone dock so the front camera faces people (or flip for back-camera mode).  
+  3. Front / back camera switch + focus on the back lens when useful.  
+  4. Wire bump (+ optional HC-SR04); phone soft-stops on bump / near range (chassis already announces sensors).  
+  5. Port Android spoken motion (`stop` / `follow` / turn) to iOS — today “Lulu, stop” only moves motors on Android.  
+  6. One rehearsed script + keep README “what’s built / not yet” in sync.  
+- **Hard parts:** hardware verification; iPhone still Wi‑Fi-only for the link.
+
+### Lost-person search spin
+
+- **Status:** spark  
+- **Why:** When follow loses the person, STOP feels dead; a slow in-place search looks alive and often reacquires.  
+- **Idea:** After N frames lost → gentle yaw sweep (or alternate left/right), eyes “curious/confused”; stop on reacquire or timeout. Honor bump/range.  
+- **Hard parts:** don’t spin off a table; cancel immediately on wake “stop.”
+
+### Eyes show link / safety state
+
+- **Status:** spark  
+- **Why:** Demo audience can’t see Debug; when USB drops or bump hits, the face should change.  
+- **Idea:** Map link-lost → sad/confused blink; bump/estop → wide startled; reconnect → happy flash then listening. Reuse emotion enum; no new art.  
+- **Hard parts:** don’t thrash emotions on flaky CDC; debounce.
+
+### Speak softer when close
+
+- **Status:** spark  
+- **Why:** At 30 cm, TTS is shouty; distance is already in Follow.  
+- **Idea:** Scale TTS volume (and maybe speech rate) from person/marker distance; excited emotion still allowed, just quieter.  
+- **Hard parts:** Android/iOS TTS volume APIs differ; don’t fight system volume every frame.
+
+### Short-term talk memory without a cloud Brain
+
+- **Status:** spark  
+- **Why:** Local `reply()` is single-turn; “what did I just say?” fails unless Brain is configured.  
+- **Idea:** Keep last ~6 turns on phone; local replies can echo/refer; optional tiny on-device model later. Audience KB (above) is long-term; this is the open chat window.  
+- **Hard parts:** keep it tiny; wake name still gates new turns.
+
 ### Table-edge awareness (cliff stop without only IR)
 
 - **Status:** spark  
@@ -40,7 +96,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 ### Wake name / attention
 
 - **Status:** shipped  
-- Ignore ambient talk until someone says the robot’s name (`hey Lulu, …`). Typed Debug lines skip the gate.
+- Ignore ambient talk until someone says the robot’s name (`hey Lulu, …`). That opens ~30s of conversation without repeating the name; each answered turn refreshes the window. Typed Debug lines skip the gate.
 
 ### Expressive eyes (medium) driven by conversation emotion
 
@@ -81,6 +137,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 - **Status:** building (on `feature/usb-c-link`)  
 - USB (Android) or Wi‑Fi: `wifi.set` into NVS; stream `firmware.begin` + `.bin` for OTA. First flash still from a laptop.
+- **MVP polish:** after Save Wi‑Fi, surface the robot’s IP / “ready for iPhone” in the eyes/status line so the second phone can connect without a laptop serial log.
 
 ### Bluetooth body link
 

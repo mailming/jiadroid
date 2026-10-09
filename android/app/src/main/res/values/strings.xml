@@ -36,13 +36,14 @@
     <string name="robot_name_label">Name</string>
     <string name="robot_name_hint">Lulu</string>
     <string name="robot_name_default">Lulu</string>
-    <string name="robot_name_help">Say the name to get its attention</string>
+    <string name="robot_name_help">Say the name once; it keeps listening for about 30 seconds</string>
     <string name="brain_url_hint">Model URL, e.g. https://api.anthropic.com/v1</string>
     <string name="brain_model_hint">Model</string>
     <string name="brain_key_hint">API key</string>
     <string name="brain_use">Use</string>
     <string name="brain_local">Replies come from the phone. Add a model URL for real conversation.</string>
     <string name="brain_on">Replies come from %1$s at %2$s.</string>
+    <string name="brain_need_key">Model URL is set, but the API key field is empty. Paste the key here (a Mac shell export does not reach the phone), then tap Use.</string>
     <string name="link_idle">Not connected. The duck above still follows what the camera sees.</string>
     <string name="need_address">Enter a Wi‑Fi address, tap USB for the cable, or use the phone simulator alone.</string>
     <string name="sim_description">Simulated duck following the marker</string>

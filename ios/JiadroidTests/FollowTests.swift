@@ -21,4 +21,15 @@ final class FollowTests: XCTestCase {
     func testLocalGreetingIsHappy() {
         XCTAssertEqual(reply(heard: "hello", seeing: "Person is centered").emotion, .happy)
     }
+
+    func testWakeOpensAConversationWindow() {
+        let session = AttentionSession(holdSeconds: 30)
+        let wake = session.consider(heard: "hey Lulu", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 1))
+        XCTAssertTrue(wake.addressed)
+        let followUp = session.consider(heard: "what do you see", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 5))
+        XCTAssertTrue(followUp.addressed)
+        XCTAssertEqual(followUp.utterance, "what do you see")
+        let late = session.consider(heard: "are you there", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 40))
+        XCTAssertFalse(late.addressed)
+    }
 }
