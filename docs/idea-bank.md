@@ -117,6 +117,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
   - Voice lifecycle: hearing → `listening`, model wait → `thinking`, speaking → hold reply emotion, then ease back to follow/idle.
 - **Eyes play:** blink, brow/lid shape, pupil scale, cheek tint — still Canvas/SwiftUI, driven by `lookX`/`lookY` + emotion state.
 - **Hard parts:** model format must be strict (fallback `neutral` on parse fail); don’t let emotion tags leak into speech; keep one shared emotion vocabulary on Android and iOS.
+- **Next polish:** feed Gemini / ChatGPT / a design tool with the constrained prompts in [eyes-design.md](eyes-design.md) (JSON mood table only — no new art pipeline).
 
 ### Voice-command robot butler
 
