@@ -12,6 +12,13 @@
         android:name="android.hardware.usb.host"
         android:required="false" />
 
+    <!-- Required on Android 11+ so SpeechRecognizer can see the system speech service. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
