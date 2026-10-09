@@ -8,26 +8,40 @@ import java.net.URL
 /**
  * A language model for spoken replies. Anthropic URLs use the Messages API with
  * Claude Haiku 5.5 settings; other hosts use OpenAI chat completions (OpenAI,
- * xAI Grok, Ollama).
+ * xAI Grok, Ollama). Recent turns come from [TalkMemory]; lasting facts from
+ * [AudienceKb] (persisted on the phone).
  */
 class Brain(private val baseUrl: String, private val model: String, private val key: String) {
-    private val history = ArrayDeque<JSONObject>()
     private val anthropic = baseUrl.contains("anthropic", ignoreCase = true)
 
     /** Blocks on the network. Call it off the main thread. */
-    fun answer(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): SpokenReply {
+    fun answer(
+        heard: String,
+        seeing: String,
+        name: String = DEFAULT_ROBOT_NAME,
+        memory: TalkMemory,
+        kb: AudienceKb,
+    ): SpokenReply {
         val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
-        val system = personality(who) + "\nRight now your camera says: $seeing."
-        val raw = if (anthropic) askAnthropic(system, heard) else askOpenAi(system, heard)
-        val spoken = parseSpokenReply(raw)
-        remember(message("user", heard))
-        remember(message("assistant", spoken.say))
-        return spoken
+        val context = listOf(kb.promptBlock(), memory.contextBlock())
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+        val system = buildString {
+            append(personality(who))
+            append("\nRight now your camera says: $seeing.")
+            if (context.isNotEmpty()) {
+                append("\n\n")
+                append(context)
+                append("\nUse the audience knowledge base and recent turns when relevant. Do not invent details.")
+            }
+        }
+        val raw = if (anthropic) askAnthropic(system, heard, memory) else askOpenAi(system, heard, memory)
+        return parseSpokenReply(raw)
     }
 
-    private fun askAnthropic(system: String, heard: String): String {
+    private fun askAnthropic(system: String, heard: String, memory: TalkMemory): String {
         val messages = JSONArray()
-        history.forEach { messages.put(it) }
+        memory.chatTurns().forEach { messages.put(message(it.role, it.text)) }
         messages.put(message("user", heard))
         val body = JSONObject()
             .put("model", model)
@@ -52,10 +66,10 @@ class Brain(private val baseUrl: String, private val model: String, private val 
         return raw
     }
 
-    private fun askOpenAi(system: String, heard: String): String {
+    private fun askOpenAi(system: String, heard: String, memory: TalkMemory): String {
         val messages = JSONArray()
         messages.put(message("system", system))
-        history.forEach { messages.put(it) }
+        memory.chatTurns().forEach { messages.put(message(it.role, it.text)) }
         messages.put(message("user", heard))
         val body = JSONObject()
             .put("model", model)
@@ -97,15 +111,9 @@ class Brain(private val baseUrl: String, private val model: String, private val 
         }
     }
 
-    private fun remember(turn: JSONObject) {
-        history.addLast(turn)
-        while (history.size > HISTORY_TURNS) history.removeFirst()
-    }
-
     private fun message(role: String, content: String) = JSONObject().put("role", role).put("content", content)
 
     private companion object {
-        const val HISTORY_TURNS = 12
         const val ANTHROPIC_VERSION = "2023-06-01"
         /** Room for adaptive thinking plus a short spoken reply. */
         const val ANTHROPIC_MAX_TOKENS = 1024

@@ -15,6 +15,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private let onTurn: (String, String) -> Void
     private let onHearing: (String) -> Void
     private let onEmotion: (Emotion) -> Void
+    private let onAction: (VoiceAction) -> Void
 
     private let audioEngine = AVAudioEngine()
     private let synthesizer = AVSpeechSynthesizer()
@@ -30,19 +31,23 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private var tapInstalled = false
     private var restartWork: DispatchWorkItem?
     private let attention = AttentionSession()
+    private let memory = TalkMemory()
+    private let kb = AudienceKb()
 
     init(
         seeing: @escaping () -> String,
         onLine: @escaping (String) -> Void,
         onTurn: @escaping (String, String) -> Void,
         onHearing: @escaping (String) -> Void,
-        onEmotion: @escaping (Emotion) -> Void
+        onEmotion: @escaping (Emotion) -> Void,
+        onAction: @escaping (VoiceAction) -> Void
     ) {
         self.seeing = seeing
         self.onLine = onLine
         self.onTurn = onTurn
         self.onHearing = onHearing
         self.onEmotion = onEmotion
+        self.onAction = onAction
         super.init()
         synthesizer.delegate = self
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -90,15 +95,24 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         if gate.utterance.isEmpty {
             speaking = true
             closeMic()
-            speak(SpokenReply(say: "Yes?", emotion: .curious))
+            speak(SpokenReply(say: "Yes?", emotion: .curious), rememberUser: nil)
             return
+        }
+        if let action = parseVoiceAction(gate.utterance) {
+            onAction(action)
+            onTurn("Action", action.description)
         }
         speaking = true
         closeMic()
         let seen = seeing()
         let request = gate.utterance
+        if let localRecall = kb.recallReply(heard: request) ?? memory.recallReply(heard: request) {
+            speak(localRecall, rememberUser: request)
+            return
+        }
         guard let brain else {
-            speak(reply(heard: request, seeing: seen, name: name))
+            let spoken = reply(heard: request, seeing: seen, name: name, memory: memory, kb: kb)
+            speak(spoken, rememberUser: request)
             return
         }
         onEmotion(.thinking)
@@ -107,12 +121,18 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             guard let self else { return }
             let spoken: SpokenReply
             do {
-                spoken = try brain.answer(heard: request, seeing: seen, name: name)
+                spoken = try brain.answer(
+                    heard: request,
+                    seeing: seen,
+                    name: name,
+                    memory: self.memory,
+                    kb: self.kb
+                )
             } catch {
                 DispatchQueue.main.async { self.onTurn("Model", "failed: \(error.localizedDescription)") }
-                spoken = reply(heard: request, seeing: seen, name: name)
+                spoken = reply(heard: request, seeing: seen, name: name, memory: self.memory, kb: self.kb)
             }
-            DispatchQueue.main.async { self.speak(spoken) }
+            DispatchQueue.main.async { self.speak(spoken, rememberUser: request) }
         }
     }
 
@@ -227,7 +247,11 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    private func speak(_ spoken: SpokenReply) {
+    private func speak(_ spoken: SpokenReply, rememberUser: String?) {
+        if let rememberUser {
+            kb.rememberFrom(rememberUser)
+            memory.rememberExchange(user: rememberUser, assistant: spoken.say)
+        }
         onEmotion(spoken.emotion)
         onTurn("Me", spoken.say)
         onLine(spoken.say)

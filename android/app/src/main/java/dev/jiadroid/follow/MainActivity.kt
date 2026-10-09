@@ -77,6 +77,12 @@ class MainActivity : AppCompatActivity() {
     private var hearing: String? = null
     private var voiceDecision: FollowDecision? = null
     private var voiceActionUntil = 0L
+    private val lostSearch = LostSearch()
+    private var hadLink = false
+    private var bumpUntil = 0L
+    private var reconnectHappyUntil = 0L
+    private var lastBumpPollAt = 0L
+    private var bumpPolling = false
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -220,20 +226,64 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun step(dt: Float) {
-        val fresh = lastScene.visible && SystemClock.elapsedRealtime() - lastMarkerAt < HOLD_MS
+        val now = SystemClock.elapsedRealtime()
+        val fresh = lastScene.visible && now - lastMarkerAt < HOLD_MS
         val scene = if (fresh) lastScene else Scene(false, 0f, 0f)
         if (!fresh) {
             lastScene = scene
             markerCorners = null
             binding.overlay.setMarker(null, 0, 0, "")
         }
-        val decision = currentDecision(decide(scene, subject))
+        val follow = decide(scene, subject)
+        // Voice holds (stop / turn) cancel the search spin; otherwise look for the person.
+        val tracked = if (voiceDecision != null) {
+            lostSearch.clear()
+            follow
+        } else {
+            lostSearch.enrich(scene, follow, now, subject)
+        }
+        val decision = currentDecision(tracked)
         if (decision.command == "STOP") gait = 0f else gait += dt * 7f
         stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
         binding.eyes.render(decision, if (scene.visible) gazeY else 0f)
+        refreshFace(decision, now)
+        pollBump(now)
         show(decision, scene)
         send(decision, force = false)
+    }
+
+    /** Eyes are the audience face — link / bump / search beat conversation mood. */
+    private fun refreshFace(decision: FollowDecision, now: Long) {
+        when {
+            hadLink && link.get() == null -> binding.eyes.setEmotion(Emotion.SAD)
+            now < bumpUntil -> binding.eyes.setEmotion(Emotion.EXCITED)
+            now < reconnectHappyUntil -> binding.eyes.setEmotion(Emotion.HAPPY)
+            decision.command == "SEARCH" -> binding.eyes.setEmotion(Emotion.CURIOUS)
+        }
+    }
+
+    private fun pollBump(now: Long) {
+        val robot = link.get() ?: return
+        if (!robot.hasSensor("bump") || bumpPolling || now - lastBumpPollAt < 250L) return
+        lastBumpPollAt = now
+        bumpPolling = true
+        io.execute {
+            try {
+                if (link.get() !== robot) return@execute
+                val hit = robot.readSensor("bump") >= 0.5
+                if (hit) {
+                    handler.post {
+                        if (link.get() !== robot) return@post
+                        bumpUntil = SystemClock.elapsedRealtime() + 1_200L
+                        binding.eyes.setEmotion(Emotion.EXCITED)
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                bumpPolling = false
+            }
+        }
     }
 
     /**
@@ -245,6 +295,7 @@ class MainActivity : AppCompatActivity() {
             voiceDecision = null
             voiceActionUntil = 0L
         } else {
+            lostSearch.clear()
             voiceDecision = action.decision()
             voiceActionUntil = if (action.durationMs > 0L) {
                 SystemClock.elapsedRealtime() + action.durationMs
@@ -457,7 +508,11 @@ class MainActivity : AppCompatActivity() {
         connecting = false
         setLinkButtonsEnabled(true)
         link.set(robot)
+        hadLink = true
         lastCommandKey = null
+        reconnectHappyUntil = SystemClock.elapsedRealtime() + 1_500L
+        bumpUntil = 0L
+        binding.eyes.setEmotion(Emotion.HAPPY)
         binding.connect.text = getString(R.string.disconnect)
         binding.connectUsb.text = getString(R.string.disconnect)
         setLinkText(status)
@@ -501,8 +556,23 @@ class MainActivity : AppCompatActivity() {
             try {
                 robot.setWifi(ssid, password)
                 handler.post {
-                    binding.wifiSave.isEnabled = link.get() === robot
+                    if (link.get() !== robot) return@post
                     setLinkText(getString(R.string.wifi_saved, ssid))
+                    binding.voiceLine.text = getString(R.string.wifi_joining, ssid)
+                }
+                val ready = waitForWifiAddress(robot)
+                handler.post {
+                    binding.wifiSave.isEnabled = link.get() === robot
+                    if (link.get() !== robot) return@post
+                    if (ready != null) {
+                        setLinkText(getString(R.string.wifi_ready, ready))
+                        binding.voiceLine.text = getString(R.string.wifi_ready, ready)
+                        binding.eyes.setEmotion(Emotion.HAPPY)
+                        reconnectHappyUntil = SystemClock.elapsedRealtime() + 2_000L
+                    } else {
+                        setLinkText(getString(R.string.wifi_saved_no_ip, ssid))
+                        binding.voiceLine.text = getString(R.string.wifi_saved_no_ip, ssid)
+                    }
                 }
             } catch (error: Exception) {
                 handler.post {
@@ -511,6 +581,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Poll until the chassis reports a LAN IP after Save Wi‑Fi (USB link stays up). */
+    private fun waitForWifiAddress(robot: RobotClient): String? {
+        if (!robot.supports("wifi.status")) return null
+        repeat(40) { attempt ->
+            if (link.get() !== robot) return null
+            try {
+                val status = robot.wifiStatus()
+                val ip = status.optString("ip").trim()
+                if (status.optBoolean("connected") && ip.isNotEmpty()) {
+                    return "$ip:8765"
+                }
+            } catch (_: Exception) {
+            }
+            if (attempt < 39) Thread.sleep(500L)
+        }
+        return null
     }
 
     private fun flashFirmware(uri: Uri) {
@@ -558,6 +646,10 @@ class MainActivity : AppCompatActivity() {
     private fun disconnect() {
         val robot = link.getAndSet(null)
         lastCommandKey = null
+        lostSearch.clear()
+        bumpUntil = 0L
+        reconnectHappyUntil = 0L
+        if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
         binding.connect.text = getString(R.string.connect)
         binding.connectUsb.text = getString(R.string.connect_usb)
         binding.wifiSave.isEnabled = false
@@ -579,6 +671,10 @@ class MainActivity : AppCompatActivity() {
     private fun onLinkFailed(robot: RobotClient, error: Exception) {
         if (!link.compareAndSet(robot, null)) return
         lastCommandKey = null
+        lostSearch.clear()
+        bumpUntil = 0L
+        reconnectHappyUntil = 0L
+        if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
         binding.connect.text = getString(R.string.connect)
         binding.connectUsb.text = getString(R.string.connect_usb)
         binding.wifiSave.isEnabled = false

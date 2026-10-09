@@ -2,14 +2,13 @@ import Foundation
 
 /// A language model for spoken replies. Anthropic URLs use the Messages API with
 /// Claude Haiku 5.5 settings; other hosts use OpenAI chat completions (OpenAI,
-/// xAI Grok, Ollama).
+/// xAI Grok, Ollama). Recent turns come from `TalkMemory`; lasting facts from
+/// `AudienceKb` (persisted on the phone).
 final class Brain {
     private let baseURL: String
     private let model: String
     private let key: String
     private let anthropic: Bool
-    private var history: [[String: String]] = []
-    private let lock = NSLock()
 
     init(baseURL: String, model: String, key: String) {
         self.baseURL = baseURL
@@ -19,21 +18,29 @@ final class Brain {
     }
 
     /// Blocks on the network. Call it off the main thread.
-    func answer(heard: String, seeing: String, name: String = defaultRobotName) throws -> SpokenReply {
+    func answer(
+        heard: String,
+        seeing: String,
+        name: String = defaultRobotName,
+        memory: TalkMemory,
+        kb: AudienceKb
+    ) throws -> SpokenReply {
         let who = normalizeRobotName(name).capitalized
-        let system = Self.personality(who) + "\nRight now your camera says: \(seeing)."
-        let raw = try anthropic ? askAnthropic(system: system, heard: heard) : askOpenAI(system: system, heard: heard)
-        let spoken = parseSpokenReply(raw)
-        remember(["role": "user", "content": heard])
-        remember(["role": "assistant", "content": spoken.say])
-        return spoken
+        let context = [kb.promptBlock(), memory.contextBlock()]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+        var system = Self.personality(who) + "\nRight now your camera says: \(seeing)."
+        if !context.isEmpty {
+            system += "\n\n\(context)\nUse the audience knowledge base and recent turns when relevant. Do not invent details."
+        }
+        let raw = try anthropic
+            ? askAnthropic(system: system, heard: heard, memory: memory)
+            : askOpenAI(system: system, heard: heard, memory: memory)
+        return parseSpokenReply(raw)
     }
 
-    private func askAnthropic(system: String, heard: String) throws -> String {
-        var messages: [[String: String]] = []
-        lock.lock()
-        messages.append(contentsOf: history)
-        lock.unlock()
+    private func askAnthropic(system: String, heard: String, memory: TalkMemory) throws -> String {
+        var messages: [[String: String]] = memory.chatTurns().map { ["role": $0.role, "content": $0.text] }
         messages.append(["role": "user", "content": heard])
         let body: [String: Any] = [
             "model": model,
@@ -60,13 +67,11 @@ final class Brain {
         return text
     }
 
-    private func askOpenAI(system: String, heard: String) throws -> String {
+    private func askOpenAI(system: String, heard: String, memory: TalkMemory) throws -> String {
         var messages: [[String: String]] = [
             ["role": "system", "content": system],
         ]
-        lock.lock()
-        messages.append(contentsOf: history)
-        lock.unlock()
+        messages.append(contentsOf: memory.chatTurns().map { ["role": $0.role, "content": $0.text] })
         messages.append(["role": "user", "content": heard])
         let body: [String: Any] = [
             "model": model,
@@ -132,16 +137,6 @@ final class Brain {
         return json
     }
 
-    private func remember(_ turn: [String: String]) {
-        lock.lock()
-        history.append(turn)
-        while history.count > Self.historyTurns {
-            history.removeFirst()
-        }
-        lock.unlock()
-    }
-
-    private static let historyTurns = 12
     private static let anthropicVersion = "2023-06-01"
     /// Room for adaptive thinking plus a short spoken reply.
     private static let anthropicMaxTokens = 1024

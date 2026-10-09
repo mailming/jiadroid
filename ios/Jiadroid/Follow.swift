@@ -148,6 +148,58 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
 }
 
+/// When the target disappears, wait briefly then gently yaw left/right to reacquire
+/// instead of sitting on STOP. Cancels immediately when the person is seen again.
+final class LostSearch {
+    private let grace: TimeInterval
+    private let maxSearch: TimeInterval
+    private let slice: TimeInterval
+    private let searchYaw: Float
+    private var lostSince: Date?
+    private(set) var searching = false
+
+    init(
+        grace: TimeInterval = 0.4,
+        maxSearch: TimeInterval = 8,
+        slice: TimeInterval = 1.2,
+        searchYaw: Float = 0.55
+    ) {
+        self.grace = grace
+        self.maxSearch = maxSearch
+        self.slice = slice
+        self.searchYaw = searchYaw
+    }
+
+    func clear() {
+        lostSince = nil
+        searching = false
+    }
+
+    func enrich(scene: Scene, follow: FollowDecision, now: Date = Date(), subject: String) -> FollowDecision {
+        if scene.visible {
+            clear()
+            return follow
+        }
+        if lostSince == nil { lostSince = now }
+        let lostFor = now.timeIntervalSince(lostSince ?? now)
+        if lostFor < grace || lostFor > maxSearch {
+            searching = false
+            return follow
+        }
+        searching = true
+        let left = Int(lostFor / slice) % 2 == 0
+        let yaw = left ? searchYaw : -searchYaw
+        return FollowDecision(
+            situation: "\(subject) is lost — looking",
+            command: "SEARCH",
+            forward: 0,
+            lateral: 0,
+            yaw: yaw,
+            headYaw: min(0.5, max(-0.5, yaw))
+        )
+    }
+}
+
 func stepPose(_ pose: inout Pose, forward: Float, lateral: Float, yaw: Float, dt: Float) {
     let facingX = cos(pose.heading)
     let facingY = sin(pose.heading)
@@ -214,6 +266,30 @@ enum FollowLogicTests {
         try expect(hidden.situation == "Marker is lost", "lost situation")
         try expect(hidden.command == "STOP", "lost command")
 
+        let search = LostSearch(grace: 0.2, maxSearch: 5, slice: 1.0, searchYaw: 0.5)
+        let t0 = Date()
+        _ = search.enrich(
+            scene: Scene(visible: false, angle: 0, distance: 0),
+            follow: hidden,
+            now: t0,
+            subject: "Marker"
+        )
+        let looking = search.enrich(
+            scene: Scene(visible: false, angle: 0, distance: 0),
+            follow: hidden,
+            now: t0.addingTimeInterval(1),
+            subject: "Marker"
+        )
+        try expect(looking.command == "SEARCH", "search command")
+        try expect(search.searching, "search active")
+        _ = search.enrich(
+            scene: Scene(visible: true, angle: 0, distance: 1),
+            follow: decide(Scene(visible: true, angle: 0, distance: 1)),
+            now: t0.addingTimeInterval(2),
+            subject: "Marker"
+        )
+        try expect(!search.searching, "search clears on reacquire")
+
         let scene = measure(centerX: 800, widthPx: 100, imageWidth: 1000, hfovRad: hfov, markerWidthM: 0.06)
         try expect(scene.visible, "measured visible")
         try expect(scene.angle > 0.3, "measured angle")
@@ -254,13 +330,17 @@ enum FollowLogicTests {
         try expect(abs(pose.y - 0.1) < 0.0001, "pose y \(pose.y)")
 
         try expect(
-            reply(heard: "hello there", seeing: "Person is centered") == "Hello. I am Vicky. I can see you, and I can hear you.",
+            reply(heard: "hello there", seeing: "Person is centered").say
+                == "Hello. I am Vicky. I can see you, and I can hear you.",
             "greeting"
         )
         try expect(!parseAttention(heard: "what do you see", name: "vicky").addressed, "wake required")
         let hey = parseAttention(heard: "hey Vicky, stop", name: "vicky")
         try expect(hey.addressed && hey.utterance == "stop", "wake strips name")
-        try expect(reply(heard: "", seeing: "Person is centered") == "Yes?", "name only")
+        try expect(reply(heard: "", seeing: "Person is centered").say == "Yes?", "name only")
+        try expect(parseVoiceAction("turn right now")?.motion == .turnRight, "voice turn")
+        try expect(parseVoiceAction("follow me")?.motion == .follow, "voice follow")
+        try expect(parseVoiceAction("do not turn right") == nil, "voice negation")
         try expect(
             reply(heard: "what do you see", seeing: "Person is lost") == "I don't see anyone right now.",
             "lost sight"

@@ -29,6 +29,14 @@ final class FollowSession: ObservableObject, CameraSink {
     private var voiceSession: VoiceSession?
     private var talk: [String] = []
     private var hearing: String?
+    private let lostSearch = LostSearch()
+    private var voiceDecision: FollowDecision?
+    private var voiceActionUntil = Date.distantPast
+    private var hadLink = false
+    private var bumpUntil = Date.distantPast
+    private var reconnectHappyUntil = Date.distantPast
+    private var lastBumpPollAt = Date.distantPast
+    private var bumpPolling = false
 
     func start() {
         camera.sink = self
@@ -50,7 +58,8 @@ final class FollowSession: ObservableObject, CameraSink {
                 onLine: { [weak self] line in self?.voice.line = line },
                 onTurn: { [weak self] who, text in self?.logTurn(who, text) },
                 onHearing: { [weak self] text in self?.logHearing(text) },
-                onEmotion: { [weak self] emotion in self?.voice.emotion = emotion }
+                onEmotion: { [weak self] emotion in self?.voice.emotion = emotion },
+                onAction: { [weak self] action in self?.applyVoiceAction(action) }
             )
             loadBrain(save: false)
         }
@@ -137,21 +146,52 @@ final class FollowSession: ObservableObject, CameraSink {
         let password = link.wifiPassword
         link.wifiBusy = true
         io.async { [weak self] in
+            guard let self else { return }
             do {
                 _ = try robot.setWifi(ssid: ssid, password: password)
                 DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.link.wifiBusy = false
+                    guard self.currentRobot() === robot else { return }
                     self.link.linkText = "Saved Wi‑Fi “\(ssid)”. Robot is joining the network…"
+                    self.voice.line = "Joining “\(ssid)”…"
+                }
+                let ready = self.waitForWifiAddress(robot)
+                DispatchQueue.main.async {
+                    self.link.wifiBusy = false
+                    guard self.currentRobot() === robot else { return }
+                    if let ready {
+                        let message = "Ready for iPhone · \(ready)"
+                        self.link.linkText = message
+                        self.voice.line = message
+                        self.voice.emotion = .happy
+                        self.reconnectHappyUntil = Date().addingTimeInterval(2)
+                    } else {
+                        let message = "Saved Wi‑Fi “\(ssid)”, but no IP yet. Check the network and try Connect with host:8765."
+                        self.link.linkText = message
+                        self.voice.line = message
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    guard let self else { return }
                     self.link.wifiBusy = false
                     self.link.linkText = error.localizedDescription
                 }
             }
         }
+    }
+
+    /// Poll until the chassis reports a LAN IP after Save Wi‑Fi.
+    private func waitForWifiAddress(_ robot: RobotClient) -> String? {
+        guard robot.supports("wifi.status") else { return nil }
+        for attempt in 0..<40 {
+            guard currentRobot() === robot else { return nil }
+            if let status = try? robot.wifiStatus() {
+                let ip = (status["ip"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let connected = status["connected"] as? Bool ?? false
+                if connected && !ip.isEmpty { return "\(ip):8765" }
+            }
+            if attempt < 39 { Thread.sleep(forTimeInterval: 0.5) }
+        }
+        return nil
     }
 
     func flashFirmware(_ data: Data) {
@@ -227,7 +267,15 @@ final class FollowSession: ObservableObject, CameraSink {
             sim.corners = []
             sim.gazeY = 0
         }
-        let decision = decide(shown, subject: subject)
+        let follow = decide(shown, subject: subject)
+        let tracked: FollowDecision
+        if voiceDecision != nil {
+            lostSearch.clear()
+            tracked = follow
+        } else {
+            tracked = lostSearch.enrich(scene: shown, follow: follow, now: now, subject: subject)
+        }
+        let decision = currentDecision(tracked, now: now)
         sim.gait = decision.command == "STOP" ? 0 : sim.gait + dt * 7
         stepPose(&sim.pose, forward: decision.forward, lateral: decision.lateral, yaw: decision.yaw, dt: dt)
         sim.trail.append((sim.pose.x, sim.pose.y))
@@ -243,8 +291,69 @@ final class FollowSession: ObservableObject, CameraSink {
         lookY += (vertical - lookY) * 0.25
         sim.lookX = lookX
         sim.lookY = lookY
+        refreshFace(decision, now: now)
+        pollBump(now: now)
         show(decision, shown)
         send(decision, force: false)
+    }
+
+    private func applyVoiceAction(_ action: VoiceAction) {
+        if action.motion == .follow {
+            voiceDecision = nil
+            voiceActionUntil = .distantPast
+        } else {
+            lostSearch.clear()
+            voiceDecision = action.decision()
+            voiceActionUntil = action.durationMs > 0
+                ? Date().addingTimeInterval(action.durationMs)
+                : .distantFuture
+        }
+        lastCommandKey = nil
+    }
+
+    private func currentDecision(_ follow: FollowDecision, now: Date) -> FollowDecision {
+        guard let manual = voiceDecision else { return follow }
+        if voiceActionUntil != .distantFuture && now >= voiceActionUntil {
+            let stopped = VoiceAction(motion: .stop).decision()
+            voiceDecision = stopped
+            voiceActionUntil = .distantFuture
+            lastCommandKey = nil
+            return stopped
+        }
+        return manual
+    }
+
+    /// Eyes are the audience face — link / bump / search beat conversation mood.
+    private func refreshFace(_ decision: FollowDecision, now: Date) {
+        if hadLink && currentRobot() == nil {
+            voice.emotion = .sad
+        } else if now < bumpUntil {
+            voice.emotion = .excited
+        } else if now < reconnectHappyUntil {
+            voice.emotion = .happy
+        } else if decision.command == "SEARCH" {
+            voice.emotion = .curious
+        }
+    }
+
+    private func pollBump(now: Date) {
+        guard let robot = currentRobot(), robot.hasSensor("bump"), !bumpPolling else { return }
+        guard now.timeIntervalSince(lastBumpPollAt) >= 0.25 else { return }
+        lastBumpPollAt = now
+        bumpPolling = true
+        io.async { [weak self] in
+            defer {
+                DispatchQueue.main.async { self?.bumpPolling = false }
+            }
+            guard let self, self.currentRobot() === robot else { return }
+            let hit = ((try? robot.readSensor("bump")) ?? 0) >= 0.5
+            guard hit else { return }
+            DispatchQueue.main.async {
+                guard self.currentRobot() === robot else { return }
+                self.bumpUntil = Date().addingTimeInterval(1.2)
+                self.voice.emotion = .excited
+            }
+        }
     }
 
     private func show(_ decision: FollowDecision, _ scene: Scene) {
@@ -359,7 +468,11 @@ final class FollowSession: ObservableObject, CameraSink {
     private func onLinked(_ robot: RobotClient, _ status: String) {
         link.connecting = false
         setRobot(robot)
+        hadLink = true
         lastCommandKey = nil
+        bumpUntil = .distantPast
+        reconnectHappyUntil = Date().addingTimeInterval(1.5)
+        voice.emotion = .happy
         link.connected = true
         link.canConfigureWifi = robot.supports("wifi.set")
         link.canFlashFirmware = robot.supports("firmware.begin")
@@ -380,6 +493,10 @@ final class FollowSession: ObservableObject, CameraSink {
         connectGeneration += 1
         let robot = swapRobot(nil)
         lastCommandKey = nil
+        lostSearch.clear()
+        bumpUntil = .distantPast
+        reconnectHappyUntil = .distantPast
+        if hadLink { voice.emotion = .sad }
         link.connected = false
         link.connecting = false
         link.wifiBusy = false
@@ -393,6 +510,10 @@ final class FollowSession: ObservableObject, CameraSink {
         guard currentRobot() === robot else { return }
         setRobot(nil)
         lastCommandKey = nil
+        lostSearch.clear()
+        bumpUntil = .distantPast
+        reconnectHappyUntil = .distantPast
+        if hadLink { voice.emotion = .sad }
         link.connected = false
         link.wifiBusy = false
         link.canConfigureWifi = false

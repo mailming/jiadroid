@@ -154,4 +154,16 @@ class FollowTest {
         assertEquals(0f, pose.x, 0.0001f)
         assertEquals(0.1f, pose.y, 0.0001f)
     }
+
+    @Test
+    fun lostTargetStartsASearchSpinThenClearsOnReacquire() {
+        val search = LostSearch(graceMs = 200L, maxSearchMs = 5_000L, sliceMs = 1_000L, searchYaw = 0.5f)
+        val hidden = decide(Scene(false, 0f, 0f))
+        search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 0L, subject = "Marker")
+        val looking = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 1_000L, subject = "Marker")
+        assertEquals("SEARCH", looking.command)
+        assertTrue(search.searching)
+        search.enrich(Scene(true, 0f, 1f), decide(Scene(true, 0f, 1f)), nowMs = 2_000L, subject = "Marker")
+        assertFalse(search.searching)
+    }
 }

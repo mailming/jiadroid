@@ -188,21 +188,17 @@ Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
 - A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
 - Follow Me logic that decides where the robot should go, and rescales that decision to any body.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default (mood from conversation), listen and answer out loud only after the wake name (default Vicky), keep talk and camera on a Debug screen with the simulated duck, and send motion to a linked chassis or laptop simulator. Android also maps clear spoken commands (stop / follow / turn / forward / back) to brief motion.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default (mood from conversation, plus link-lost / bump / reconnect / search), listen and answer out loud only after the wake name (default Vicky), keep talk and camera on a Debug screen with the simulated duck, and send motion to a linked chassis or laptop simulator. Both map clear spoken commands (stop / follow / turn / forward / back) to brief motion. After Save Wi‑Fi they poll for the chassis IP and show “Ready for iPhone · ip:8765”. When the person is lost they gently yaw-search instead of sitting on STOP.
 
 ## What is not built yet
 
 ### Follow Me MVP (next)
 
 - Front / back camera switch. Today only the front camera is used. The back camera is often sharper and can focus; useful for distant people, markers, table edges, or looking at the floor. Needs remapped mirroring and a dock that can face either way.
-- Phone soft-stop on bump / near range (chassis already announces those sensors; the app does not yet use them).
-- Spoken motion commands on iOS (Android already has them).
-- Lost-person search spin instead of a dead STOP when the target disappears.
-- Eyes that show link-lost / bump / reconnect without opening Debug.
-- Local audience memory and short-term talk history on the phone (who is talking, last few turns), without guessing gender from voice pitch.
+- Phone soft-stop on bump / near range (eyes already react to bump when the switch is wired; motion does not yet soft-stop on it).
 - Speak softer when the person is close (distance is already measured).
 - A vertical phone dock on the 2WD plate, and a measured bring-up of motors / encoders on the real chassis.
-- Demo polish: show the robot’s Wi‑Fi address after Save Wi‑Fi so a second phone can connect without a serial log.
+- One rehearsed demo script.
 
 ### Later / platform
 

@@ -18,6 +18,9 @@
     <string name="wifi_save">Save Wi‑Fi</string>
     <string name="firmware_flash">Flash .bin</string>
     <string name="wifi_saved">Saved Wi‑Fi “%1$s”. Robot is joining the network…</string>
+    <string name="wifi_joining">Joining “%1$s”…</string>
+    <string name="wifi_ready">Ready for iPhone · %1$s</string>
+    <string name="wifi_saved_no_ip">Saved Wi‑Fi “%1$s”, but no IP yet. Check the network and try Connect with host:8765.</string>
     <string name="wifi_need_ssid">Enter the robot Wi‑Fi name, then tap Save Wi‑Fi.</string>
     <string name="firmware_need_link">Connect to the robot first (USB or Wi‑Fi), then pick a firmware.bin.</string>
     <string name="firmware_uploading">Uploading firmware… %1$d%%</string>

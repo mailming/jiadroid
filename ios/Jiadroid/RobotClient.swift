@@ -49,6 +49,8 @@ final class RobotClient {
     private(set) var controls: [String: [String: Limit]] = [:]
     /// Mount ids from `session.hello`, in order.
     private(set) var mounts: [String] = []
+    /// Sensor device ids from `session.hello`.
+    private(set) var sensors: Set<String> = []
     private var safetyValue = "ready"
     var safety: String {
         lock.lock()
@@ -150,6 +152,17 @@ final class RobotClient {
 
     func wifiStatus() throws -> [String: Any] {
         try request("wifi.status", body: [:])
+    }
+
+    func hasSensor(_ id: String) -> Bool { sensors.contains(id) }
+
+    /// Read a sensor announced in hello. Booleans come back as 0 / 1.
+    func readSensor(_ id: String) throws -> Double {
+        let body = try request("sensor.read", body: ["id": id])
+        if let value = body["value"] as? Double { return value }
+        if let value = body["value"] as? Int { return Double(value) }
+        if let value = body["value"] as? NSNumber { return value.doubleValue }
+        return 0
     }
 
     /// Stream a firmware.bin after `firmware.begin`. Prefer Wi‑Fi; USB is slower when available.
@@ -275,8 +288,10 @@ final class RobotClient {
         if let safetyBody = body["safety"] as? [String: Any], !text(safetyBody, "state").isEmpty {
             setSafety(text(safetyBody, "state"))
         }
-        servoCount = countServos(body["devices"] as? [Any])
-        deviceCount = (body["devices"] as? [Any])?.count ?? 0
+        let devices = body["devices"] as? [Any]
+        servoCount = countServos(devices)
+        deviceCount = devices?.count ?? 0
+        sensors = sensorIds(devices)
         controls = version == "0.1" ? legacyDuckControls() : parseControls(body["controls"] as? [String: Any])
         mounts = parseMounts(body["mounts"] as? [Any])
     }
@@ -416,6 +431,17 @@ final class RobotClient {
         if announceFirmware { firmwareWait.signal() }
         pending.values.forEach { $0.signal() }
     }
+}
+
+private func sensorIds(_ devices: [Any]?) -> Set<String> {
+    guard let devices else { return [] }
+    var ids = Set<String>()
+    for item in devices {
+        guard let device = item as? [String: Any], text(device, "type") == "sensor" else { continue }
+        let id = text(device, "id")
+        if !id.isEmpty { ids.insert(id) }
+    }
+    return ids
 }
 
 private func countServos(_ devices: [Any]?) -> Int {

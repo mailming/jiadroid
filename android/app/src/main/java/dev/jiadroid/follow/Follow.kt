@@ -171,6 +171,50 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
     return FollowDecision("$subject is centered", "FORWARD", 0.08f, 0f, 0f, headYaw)
 }
 
+/**
+ * When the target disappears, wait briefly then gently yaw left/right to reacquire
+ * instead of sitting on STOP. Cancels immediately when the person is seen again.
+ */
+class LostSearch(
+    private val graceMs: Long = 400L,
+    private val maxSearchMs: Long = 8_000L,
+    private val sliceMs: Long = 1_200L,
+    private val searchYaw: Float = 0.55f,
+) {
+    private var lostSinceMs: Long? = null
+    var searching: Boolean = false
+        private set
+
+    fun clear() {
+        lostSinceMs = null
+        searching = false
+    }
+
+    fun enrich(scene: Scene, follow: FollowDecision, nowMs: Long, subject: String): FollowDecision {
+        if (scene.visible) {
+            clear()
+            return follow
+        }
+        val started = lostSinceMs ?: nowMs.also { lostSinceMs = it }
+        val lostFor = nowMs - started
+        if (lostFor < graceMs || lostFor > maxSearchMs) {
+            searching = false
+            return follow
+        }
+        searching = true
+        val left = ((lostFor / sliceMs) % 2L) == 0L
+        val yaw = if (left) searchYaw else -searchYaw
+        return FollowDecision(
+            "$subject is lost — looking",
+            "SEARCH",
+            0f,
+            0f,
+            yaw,
+            yaw.coerceIn(-0.5f, 0.5f),
+        )
+    }
+}
+
 fun stepPose(pose: Pose, forward: Float, lateral: Float, yaw: Float, dt: Float) {
     val facingX = cos(pose.heading)
     val facingY = sin(pose.heading)

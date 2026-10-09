@@ -8,6 +8,15 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 ## Robot bodies / apps
 
+### Multi-person voice profiles (speaker ID → per-user KB)
+
+- **Status:** parked  
+- **Why:** One shared `AudienceKb` mixes Jia and Sam; a household robot should remember each person separately.  
+- **Idea:** Enroll a short voiceprint per person (on-device embeddings), match the mic before writing/reading KB, keep `kb/<person>.json` profiles, switch the active profile on match. Enrollment UX: “Vicky, this is Jia” / “learn my voice.”  
+- **Cheaper stepping stones (before real biometrics):** self-intro name gate (“I’m Sam”), face-lock + KB, or manual profile switch in Settings/Debug. Speech-to-text alone cannot tell speakers apart.  
+- **Hard parts:** enrollment quality in noisy rooms; false switches; privacy (voiceprints stay on phone); Android vs iOS mic/pipeline differences.  
+- **Depends on:** shipped v1 audience KB; optional face re-ID.
+
 ### Front / back camera switch
 
 - **Status:** spark  
@@ -17,10 +26,10 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 ### Local audience memory (who is talking)
 
-- **Status:** spark  
-- **Why:** One short talk feels clever; remembering “you’re Jia, you like jokes, there’s a kid in the room” makes Vicky feel like *their* robot.  
-- **Idea:** On-phone audience KB (name, notes, last topics, soft `likelyKid` hint). Inject a tiny summary into local `reply()` / `Brain` system prompt. Clearable in Debug.  
-- **Voice tone:** Vosk / Apple Speech give text only — not man/woman/kid. Optional pitch band is a weak hint; better “who” = enroll voiceprints or fuse camera face size. Prefer self-intro (“I’m Sam”) over guessing gender.  
+- **Status:** shipped (v1)  
+- **Why:** One short talk feels clever; remembering “you’re Jia, you like jokes…” makes Vicky feel like *their* robot.  
+- **Idea:** On-phone `AudienceKb` (name, likes, from, freeform “remember…” facts). Persisted in SharedPreferences / UserDefaults. Injected into the `Brain` system prompt on every LLM call; local recall for “what’s my name / what do you remember / forget everything”. Pin identity fields; cap freeform facts (~16); 30-day TTL on soft facts; compact overflow into `summary`.  
+- **Voice tone:** Speech APIs give text only — not man/woman/kid. Prefer self-intro (“I’m Sam”) over guessing gender. Multi-speaker profiles → see *Multi-person voice profiles* (parked).  
 - **Hard parts:** privacy (stay on device); don’t invent gender; keep prompt short so local models stay fast.
 
 ### Demo-complete Follow Me (close the first show)
@@ -32,22 +41,22 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
   2. Vertical phone dock so the front camera faces people (or flip for back-camera mode).  
   3. Front / back camera switch + focus on the back lens when useful.  
   4. Wire bump (+ optional HC-SR04); phone soft-stops on bump / near range (chassis already announces sensors).  
-  5. Port Android spoken motion (`stop` / `follow` / turn) to iOS — today “Vicky, stop” only moves motors on Android.  
+  5. ~~Port Android spoken motion (`stop` / `follow` / turn) to iOS~~ — shipped.  
   6. One rehearsed script + keep README “what’s built / not yet” in sync.  
 - **Hard parts:** hardware verification; iPhone still Wi‑Fi-only for the link.
 
 ### Lost-person search spin
 
-- **Status:** spark  
+- **Status:** shipped  
 - **Why:** When follow loses the person, STOP feels dead; a slow in-place search looks alive and often reacquires.  
-- **Idea:** After N frames lost → gentle yaw sweep (or alternate left/right), eyes “curious/confused”; stop on reacquire or timeout. Honor bump/range.  
+- **Idea:** After a short grace → gentle left/right yaw (`SEARCH`); eyes curious; cancel on reacquire, timeout, or spoken “stop.”  
 - **Hard parts:** don’t spin off a table; cancel immediately on wake “stop.”
 
 ### Eyes show link / safety state
 
-- **Status:** spark  
+- **Status:** shipped  
 - **Why:** Demo audience can’t see Debug; when USB drops or bump hits, the face should change.  
-- **Idea:** Map link-lost → sad/confused blink; bump/estop → wide startled; reconnect → happy flash then listening. Reuse emotion enum; no new art.  
+- **Idea:** Map link-lost → sad; bump → excited (startled); reconnect → happy flash; search → curious. Reuse emotion enum; no new art.  
 - **Hard parts:** don’t thrash emotions on flaky CDC; debounce.
 
 ### Speak softer when close
@@ -59,9 +68,9 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 ### Short-term talk memory without a cloud Brain
 
-- **Status:** spark  
+- **Status:** shipped  
 - **Why:** Local `reply()` is single-turn; “what did I just say?” fails unless Brain is configured.  
-- **Idea:** Keep last ~6 turns on phone; local replies can echo/refer; optional tiny on-device model later. Audience KB (above) is long-term; this is the open chat window.  
+- **Idea:** Keep last ~20 turns in-session (`TalkMemory`); Brain gets them with the persistent audience KB. Wake window stays ~30s.  
 - **Hard parts:** keep it tiny; wake name still gates new turns.
 
 ### Table-edge awareness (cliff stop without only IR)
@@ -137,7 +146,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 - **Status:** building (on `feature/usb-c-link`)  
 - USB (Android) or Wi‑Fi: `wifi.set` into NVS; stream `firmware.begin` + `.bin` for OTA. First flash still from a laptop.
-- **MVP polish:** after Save Wi‑Fi, surface the robot’s IP / “ready for iPhone” in the eyes/status line so the second phone can connect without a laptop serial log.
+- **MVP polish:** ~~after Save Wi‑Fi, surface the robot’s IP / “ready for iPhone”~~ — shipped (polls `wifi.status` over USB and shows `Ready for iPhone · ip:8765`).
 
 ### Bluetooth body link
 

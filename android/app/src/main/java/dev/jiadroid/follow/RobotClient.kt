@@ -46,6 +46,10 @@ class RobotClient private constructor(
     var mounts: List<String> = emptyList()
         private set
 
+    /** Sensor device ids from `session.hello`. */
+    var sensors: Set<String> = emptySet()
+        private set
+
     /** op -> field -> limit, as announced in `session.hello`. */
     var controls: Map<String, Map<String, Limit>> = emptyMap()
         private set
@@ -74,6 +78,15 @@ class RobotClient private constructor(
     fun clearWifi(): JSONObject = request("wifi.clear", JSONObject(), 5000)
 
     fun wifiStatus(): JSONObject = request("wifi.status", JSONObject(), 5000)
+
+    fun hasSensor(id: String): Boolean = id in sensors
+
+    /** Read a sensor announced in hello. Booleans come back as 0.0 / 1.0. */
+    fun readSensor(id: String): Double {
+        val body = JSONObject()
+        body.put("id", id)
+        return request("sensor.read", body, 2000).optDouble("value", 0.0)
+    }
 
     /**
      * Stream a firmware.bin after [firmware.begin]. Prefer Wi‑Fi; USB works but is slower.
@@ -198,8 +211,10 @@ class RobotClient private constructor(
         name = robot.optString("name").ifEmpty { "Robot" }
         kind = robot.optString("kind").ifEmpty { if (version == "0.1") "biped" else "other" }
         safety = body.optJSONObject("safety")?.optString("state")?.ifEmpty { "ready" } ?: "ready"
-        servoCount = countServos(body.optJSONArray("devices"))
-        deviceCount = body.optJSONArray("devices")?.length() ?: 0
+        val devices = body.optJSONArray("devices")
+        servoCount = countServos(devices)
+        deviceCount = devices?.length() ?: 0
+        sensors = sensorIds(devices)
         controls = if (version == "0.1") legacyDuckControls() else parseControls(body.optJSONObject("controls"))
         mounts = parseMounts(body.optJSONArray("mounts"))
     }
@@ -337,6 +352,19 @@ class RobotClient private constructor(
                 throw error
             }
             return client
+        }
+    }
+}
+
+private fun sensorIds(devices: JSONArray?): Set<String> {
+    if (devices == null) return emptySet()
+    return buildSet {
+        for (index in 0 until devices.length()) {
+            val device = devices.optJSONObject(index) ?: continue
+            if (device.optString("type") == "sensor") {
+                val id = device.optString("id")
+                if (id.isNotEmpty()) add(id)
+            }
         }
     }
 }

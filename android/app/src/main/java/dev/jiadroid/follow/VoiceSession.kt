@@ -34,6 +34,19 @@ class VoiceSession(
     @Volatile var robotName: String = DEFAULT_ROBOT_NAME
     private val thinker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+    private val memory = TalkMemory()
+    private val kb = AudienceKb(
+        loadJson = {
+            activity.getSharedPreferences(KB_PREFS, AppCompatActivity.MODE_PRIVATE)
+                .getString(KB_KEY, null)
+        },
+        saveJson = { json ->
+            activity.getSharedPreferences(KB_PREFS, AppCompatActivity.MODE_PRIVATE)
+                .edit()
+                .putString(KB_KEY, json)
+                .apply()
+        },
+    )
     private var speech: SpeechRecognizer? = null
     private var speaker: TextToSpeech? = null
     private var alive = false
@@ -232,7 +245,7 @@ class VoiceSession(
         if (gate.utterance.isEmpty()) {
             speaking = true
             cancelListen()
-            speak(SpokenReply("Yes?", Emotion.CURIOUS))
+            speak(SpokenReply("Yes?", Emotion.CURIOUS), rememberUser = null)
             return
         }
         parseVoiceAction(gate.utterance)?.let { action ->
@@ -242,25 +255,37 @@ class VoiceSession(
         speaking = true
         cancelListen()
         val seen = seeing()
+        val request = gate.utterance
+        // Deterministic KB / short-term recall before spending a model call.
+        val localRecall = kb.recallReply(request) ?: memory.recallReply(request)
+        if (localRecall != null) {
+            speak(localRecall, rememberUser = request)
+            return
+        }
         val brain = brain
         if (brain == null) {
-            speak(reply(gate.utterance, seen, name))
+            val spoken = reply(request, seen, name, memory, kb)
+            speak(spoken, rememberUser = request)
             return
         }
         onEmotion(Emotion.THINKING)
         onLine("Thinking")
         thinker.execute {
             val spoken = try {
-                brain.answer(gate.utterance, seen, name)
+                brain.answer(request, seen, name, memory, kb)
             } catch (error: Exception) {
                 activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
-                reply(gate.utterance, seen, name)
+                reply(request, seen, name, memory, kb)
             }
-            activity.runOnUiThread { speak(spoken) }
+            activity.runOnUiThread { speak(spoken, rememberUser = request) }
         }
     }
 
-    private fun speak(spoken: SpokenReply) {
+    private fun speak(spoken: SpokenReply, rememberUser: String?) {
+        if (rememberUser != null) {
+            kb.rememberFrom(rememberUser)
+            memory.rememberExchange(rememberUser, spoken.say)
+        }
         onEmotion(spoken.emotion)
         onTurn("Me", spoken.say)
         onLine(spoken.say)
@@ -291,6 +316,8 @@ class VoiceSession(
     private companion object {
         const val TAG = "Jiadroid"
         const val SPEAK_LIMIT_MS = 8000L
+        const val KB_PREFS = "jiadroid_audience_kb"
+        const val KB_KEY = "notes_json"
         val NOISE = setOf("huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an")
     }
 }

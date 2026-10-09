@@ -22,6 +22,9 @@
 		BA000F /* UsbRobotLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA000F /* UsbRobotLink.swift */; };
 		BA0010 /* Attention.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0010 /* Attention.swift */; };
 		BA0011 /* Emotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0011 /* Emotion.swift */; };
+		BA0012 /* TalkMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0012 /* TalkMemory.swift */; };
+		BA0013 /* AudienceKb.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0013 /* AudienceKb.swift */; };
+		BA0014 /* VoiceAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0014 /* VoiceAction.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +54,9 @@
 		FA000F /* UsbRobotLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsbRobotLink.swift; sourceTree = "<group>"; };
 		FA0010 /* Attention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Attention.swift; sourceTree = "<group>"; };
 		FA0011 /* Emotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Emotion.swift; sourceTree = "<group>"; };
+		FA0012 /* TalkMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalkMemory.swift; sourceTree = "<group>"; };
+		FA0013 /* AudienceKb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudienceKb.swift; sourceTree = "<group>"; };
+		FA0014 /* VoiceAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAction.swift; sourceTree = "<group>"; };
 		FA000A /* FollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowTests.swift; sourceTree = "<group>"; };
 		R00001 /* Jiadroid.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiadroid.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		R00002 /* JiadroidTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JiadroidTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -82,6 +88,9 @@
 				FA000B /* Conversation.swift */,
 				FA0010 /* Attention.swift */,
 				FA0011 /* Emotion.swift */,
+				FA0012 /* TalkMemory.swift */,
+				FA0013 /* AudienceKb.swift */,
+				FA0014 /* VoiceAction.swift */,
 				FA000D /* Brain.swift */,
 				FA000E /* VoiceSession.swift */,
 				FA0003 /* RobotClient.swift */,
@@ -218,6 +227,9 @@
 				BA000B /* Conversation.swift in Sources */,
 				BA0010 /* Attention.swift in Sources */,
 				BA0011 /* Emotion.swift in Sources */,
+				BA0012 /* TalkMemory.swift in Sources */,
+				BA0013 /* AudienceKb.swift in Sources */,
+				BA0014 /* VoiceAction.swift in Sources */,
 				BA000D /* Brain.swift in Sources */,
 				BA000E /* VoiceSession.swift in Sources */,
 				BA0003 /* RobotClient.swift in Sources */,
