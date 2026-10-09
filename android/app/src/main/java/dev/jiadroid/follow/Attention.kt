@@ -1,7 +1,7 @@
 package dev.jiadroid.follow
 
 /** Default wake name when the user has not assigned one. */
-const val DEFAULT_ROBOT_NAME = "lulu"
+const val DEFAULT_ROBOT_NAME = "vicky"
 
 /** How long conversation stays open after the wake name (or each reply). */
 const val ATTENTION_HOLD_MS = 30_000L
@@ -9,7 +9,7 @@ const val ATTENTION_HOLD_MS = 30_000L
 /**
  * Whether a transcript is addressed to the robot, and the words after the wake name.
  *
- * Background chat is ignored until someone says the name (e.g. "hey Lulu, stop").
+ * Background chat is ignored until someone says the name (e.g. "hey Vicky, stop").
  * After that, follow-ups without the name still count until [ATTENTION_HOLD_MS] of silence.
  */
 data class Attention(val addressed: Boolean, val utterance: String)

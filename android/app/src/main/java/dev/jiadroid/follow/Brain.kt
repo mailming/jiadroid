@@ -6,26 +6,72 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * A language model reached over the OpenAI chat completions API. The same call
- * works for OpenAI, xAI Grok, and Ollama running on the laptop.
+ * A language model for spoken replies. Anthropic URLs use the Messages API with
+ * Claude Haiku 5.5 settings; other hosts use OpenAI chat completions (OpenAI,
+ * xAI Grok, Ollama).
  */
 class Brain(private val baseUrl: String, private val model: String, private val key: String) {
     private val history = ArrayDeque<JSONObject>()
+    private val anthropic = baseUrl.contains("anthropic", ignoreCase = true)
 
     /** Blocks on the network. Call it off the main thread. */
     fun answer(heard: String, seeing: String, name: String = DEFAULT_ROBOT_NAME): SpokenReply {
         val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
+        val system = personality(who) + "\nRight now your camera says: $seeing."
+        val raw = if (anthropic) askAnthropic(system, heard) else askOpenAi(system, heard)
+        val spoken = parseSpokenReply(raw)
+        remember(message("user", heard))
+        remember(message("assistant", spoken.say))
+        return spoken
+    }
+
+    private fun askAnthropic(system: String, heard: String): String {
         val messages = JSONArray()
-        messages.put(message("system", personality(who) + "\nRight now your camera says: $seeing."))
+        history.forEach { messages.put(it) }
+        messages.put(message("user", heard))
+        val body = JSONObject()
+            .put("model", model)
+            .put("max_tokens", ANTHROPIC_MAX_TOKENS)
+            .put("system", system)
+            .put("messages", messages)
+            .put("output_config", JSONObject().put("effort", "low"))
+        val response = post(baseUrl.trimEnd('/') + "/messages", body, anthropic = true)
+        if (response.optString("stop_reason") == "refusal") {
+            throw IllegalStateException("model refused the request")
+        }
+        val blocks = response.getJSONArray("content")
+        val text = StringBuilder()
+        for (i in 0 until blocks.length()) {
+            val block = blocks.getJSONObject(i)
+            if (block.optString("type") == "text") {
+                text.append(block.optString("text"))
+            }
+        }
+        val raw = text.toString().trim()
+        if (raw.isEmpty()) throw IllegalStateException("model reply was empty")
+        return raw
+    }
+
+    private fun askOpenAi(system: String, heard: String): String {
+        val messages = JSONArray()
+        messages.put(message("system", system))
         history.forEach { messages.put(it) }
         messages.put(message("user", heard))
         val body = JSONObject()
             .put("model", model)
             .put("messages", messages)
-            .put("max_tokens", 120)
+            .put("max_tokens", OPENAI_MAX_TOKENS)
             .put("temperature", 0.9)
+        val response = post(baseUrl.trimEnd('/') + "/chat/completions", body, anthropic = false)
+        return response
+            .getJSONArray("choices").getJSONObject(0)
+            .getJSONObject("message").getString("content")
+            .trim()
+            .ifEmpty { throw IllegalStateException("model reply was empty") }
+    }
 
-        val connection = URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection
+    private fun post(url: String, body: JSONObject, anthropic: Boolean): JSONObject {
+        val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 8000
@@ -33,11 +79,11 @@ class Brain(private val baseUrl: String, private val model: String, private val 
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             if (key.isNotBlank()) {
-                connection.setRequestProperty("Authorization", "Bearer $key")
-                // Anthropic's OpenAI-compatible path also accepts these.
-                if (baseUrl.contains("anthropic", ignoreCase = true)) {
+                if (anthropic) {
                     connection.setRequestProperty("x-api-key", key)
-                    connection.setRequestProperty("anthropic-version", "2023-06-01")
+                    connection.setRequestProperty("anthropic-version", ANTHROPIC_VERSION)
+                } else {
+                    connection.setRequestProperty("Authorization", "Bearer $key")
                 }
             }
             connection.outputStream.use { it.write(body.toString().toByteArray()) }
@@ -45,14 +91,7 @@ class Brain(private val baseUrl: String, private val model: String, private val 
             val text = (if (code in 200..299) connection.inputStream else connection.errorStream)
                 ?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (code !in 200..299) throw IllegalStateException("model replied $code ${text.take(160)}")
-            val raw = JSONObject(text)
-                .getJSONArray("choices").getJSONObject(0)
-                .getJSONObject("message").getString("content")
-                .trim()
-            val spoken = parseSpokenReply(raw)
-            remember(message("user", heard))
-            remember(message("assistant", spoken.say))
-            return spoken
+            return JSONObject(text)
         } finally {
             connection.disconnect()
         }
@@ -67,6 +106,10 @@ class Brain(private val baseUrl: String, private val model: String, private val 
 
     private companion object {
         const val HISTORY_TURNS = 12
+        const val ANTHROPIC_VERSION = "2023-06-01"
+        /** Room for adaptive thinking plus a short spoken reply. */
+        const val ANTHROPIC_MAX_TOKENS = 1024
+        const val OPENAI_MAX_TOKENS = 120
 
         fun personality(who: String) =
             "You are $who, a small walking robot whose face is a phone showing a pair of big eyes. " +

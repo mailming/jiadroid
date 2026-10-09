@@ -29,7 +29,7 @@ class EmotionTest {
     fun localGreetingIsHappy() {
         val spoken = reply("hello", "Person is centered")
         assertEquals(Emotion.HAPPY, spoken.emotion)
-        assertEquals(true, spoken.say.contains("Lulu"))
+        assertEquals(true, spoken.say.contains("Vicky"))
     }
 
     @Test

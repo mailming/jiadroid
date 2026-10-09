@@ -110,7 +110,7 @@ class FollowTest {
     @Test
     fun greetingIsSpokenBack() {
         val spoken = reply("hello there", "Person is centered")
-        assertEquals("Hello. I am Lulu. I can see you, and I can hear you.", spoken.say)
+        assertEquals("Hello. I am Vicky. I can see you, and I can hear you.", spoken.say)
         assertEquals(Emotion.HAPPY, spoken.emotion)
     }
 
@@ -123,11 +123,11 @@ class FollowTest {
 
     @Test
     fun wakeNameIsRequiredBeforeAnswering() {
-        assertFalse(parseAttention("what do you see", "lulu").addressed)
-        val hey = parseAttention("hey Lulu, stop", "lulu")
+        assertFalse(parseAttention("what do you see", "vicky").addressed)
+        val hey = parseAttention("hey Vicky, stop", "vicky")
         assertTrue(hey.addressed)
         assertEquals("stop", hey.utterance)
-        val only = parseAttention("Lulu", "lulu")
+        val only = parseAttention("Vicky", "vicky")
         assertTrue(only.addressed)
         assertEquals("", only.utterance)
         assertEquals("Yes?", reply("", "Person is centered").say)
@@ -137,13 +137,13 @@ class FollowTest {
     @Test
     fun wakeOpensAConversationWindowWithoutRepeatingTheName() {
         val session = AttentionSession(holdMs = 30_000L)
-        val wake = session.consider("hey Lulu", "lulu", requireName = true, nowMs = 1_000L)
+        val wake = session.consider("hey Vicky", "vicky", requireName = true, nowMs = 1_000L)
         assertTrue(wake.addressed)
         assertEquals("", wake.utterance)
-        val followUp = session.consider("what do you see", "lulu", requireName = true, nowMs = 5_000L)
+        val followUp = session.consider("what do you see", "vicky", requireName = true, nowMs = 5_000L)
         assertTrue(followUp.addressed)
         assertEquals("what do you see", followUp.utterance)
-        val late = session.consider("are you there", "lulu", requireName = true, nowMs = 40_000L)
+        val late = session.consider("are you there", "vicky", requireName = true, nowMs = 40_000L)
         assertFalse(late.addressed)
     }
 

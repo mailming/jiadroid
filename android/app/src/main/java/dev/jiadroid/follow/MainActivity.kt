@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
     )
 
     private val requestSenses = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants[Manifest.permission.CAMERA] == true) startCamera() else binding.link.text = getString(R.string.camera_denied)
+        if (grants[Manifest.permission.CAMERA] == true) startCamera() else setLinkText(getString(R.string.camera_denied))
         if (grants[Manifest.permission.RECORD_AUDIO] == true) {
             if (ticking) voice.start()
         } else {
@@ -117,10 +117,13 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        showDebug(false)
-        binding.eyes.setOnClickListener { showDebug(true) }
-        binding.openDebug.setOnClickListener { showDebug(true) }
-        binding.closeDebug.setOnClickListener { showDebug(false) }
+        showScreen(Screen.Eyes)
+        binding.eyes.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeDebug.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.openSettings.setOnClickListener { showScreen(Screen.Settings) }
+        binding.debugOpenSettings.setOnClickListener { showScreen(Screen.Settings) }
+        binding.settingsOpenDebug.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeSettings.setOnClickListener { showScreen(Screen.Eyes) }
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
         }
@@ -130,7 +133,7 @@ class MainActivity : AppCompatActivity() {
         binding.wifiSave.setOnClickListener { saveRobotWifi() }
         binding.firmwareFlash.setOnClickListener {
             if (link.get() == null || link.get()?.supports("firmware.begin") != true) {
-                binding.link.text = getString(R.string.firmware_need_link)
+                setLinkText(getString(R.string.firmware_need_link))
                 return@setOnClickListener
             }
             pickFirmware.launch(arrayOf("application/octet-stream", "*/*"))
@@ -330,16 +333,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showDebug(show: Boolean) {
-        // Keep Debug mode laid out behind the eyes. CameraX needs PreviewView's
-        // surface even when the user only sees the normal eyes screen.
+    private fun showScreen(screen: Screen) {
+        // Keep Debug mode laid out behind Eyes/Settings. CameraX needs PreviewView's
+        // surface even when the user only sees another screen.
         binding.debugMode.visibility = android.view.View.VISIBLE
-        binding.normalMode.visibility = if (show) android.view.View.GONE else android.view.View.VISIBLE
-        if (!show) binding.normalMode.bringToFront()
+        binding.normalMode.visibility = if (screen == Screen.Eyes) android.view.View.VISIBLE else android.view.View.GONE
+        binding.settingsMode.visibility = if (screen == Screen.Settings) android.view.View.VISIBLE else android.view.View.GONE
+        when (screen) {
+            Screen.Eyes -> binding.normalMode.bringToFront()
+            Screen.Settings -> binding.settingsMode.bringToFront()
+            Screen.Debug -> binding.debugMode.bringToFront()
+        }
         currentFocus?.clearFocus()
         hideKeyboard()
         // Showing the camera preview can reset the emulator microphone. Open it again.
         if (::voice.isInitialized) handler.postDelayed({ voice.reopen() }, 400)
+    }
+
+    private fun setLinkText(text: CharSequence?) {
+        binding.link.text = text
+        binding.debugLink.text = text
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {
@@ -376,9 +389,9 @@ class MainActivity : AppCompatActivity() {
                 if (link.get() !== robot) return@execute
                 if (decision.command == "STOP") robot.stop() else robot.walk(decision)
             } catch (error: RobotException) {
-                handler.post { binding.link.text = error.message }
+                handler.post { setLinkText(error.message) }
             } catch (error: RobotException) {
-                handler.post { binding.link.text = error.message }
+                handler.post { setLinkText(error.message) }
             } catch (error: Exception) {
                 handler.post { onLinkFailed(robot, error) }
             }
@@ -394,13 +407,13 @@ class MainActivity : AppCompatActivity() {
         if (connecting || link.get() != null) return
         val endpoint = parseEndpoint(binding.host.text?.toString().orEmpty())
         if (endpoint == null) {
-            binding.link.text = getString(R.string.need_address)
+            setLinkText(getString(R.string.need_address))
             return
         }
         hideKeyboard()
         connecting = true
         setLinkButtonsEnabled(false)
-        binding.link.text = getString(R.string.connecting)
+        setLinkText(getString(R.string.connecting))
         val (host, port) = endpoint
         io.execute {
             try {
@@ -412,7 +425,7 @@ class MainActivity : AppCompatActivity() {
                 handler.post {
                     connecting = false
                     setLinkButtonsEnabled(true)
-                    binding.link.text = error.message ?: getString(R.string.need_address)
+                    setLinkText(error.message ?: getString(R.string.need_address))
                 }
             }
         }
@@ -423,7 +436,7 @@ class MainActivity : AppCompatActivity() {
         hideKeyboard()
         connecting = true
         setLinkButtonsEnabled(false)
-        binding.link.text = getString(R.string.connecting)
+        setLinkText(getString(R.string.connecting))
         io.execute {
             try {
                 val robot = UsbRobotLink.connect(this)
@@ -434,7 +447,7 @@ class MainActivity : AppCompatActivity() {
                 handler.post {
                     connecting = false
                     setLinkButtonsEnabled(true)
-                    binding.link.text = error.message ?: getString(R.string.need_usb)
+                    setLinkText(error.message ?: getString(R.string.need_usb))
                 }
             }
         }
@@ -447,7 +460,7 @@ class MainActivity : AppCompatActivity() {
         lastCommandKey = null
         binding.connect.text = getString(R.string.disconnect)
         binding.connectUsb.text = getString(R.string.disconnect)
-        binding.link.text = status
+        setLinkText(status)
         binding.wifiSave.isEnabled = robot.supports("wifi.set")
         binding.firmwareFlash.isEnabled = robot.supports("firmware.begin")
         if (robot.supports("wifi.status")) {
@@ -473,13 +486,13 @@ class MainActivity : AppCompatActivity() {
     private fun saveRobotWifi() {
         val robot = link.get()
         if (robot == null || !robot.supports("wifi.set")) {
-            binding.link.text = getString(R.string.firmware_need_link)
+            setLinkText(getString(R.string.firmware_need_link))
             return
         }
         val ssid = binding.wifiSsid.text?.toString()?.trim().orEmpty()
         val password = binding.wifiPassword.text?.toString().orEmpty()
         if (ssid.isEmpty()) {
-            binding.link.text = getString(R.string.wifi_need_ssid)
+            setLinkText(getString(R.string.wifi_need_ssid))
             return
         }
         hideKeyboard()
@@ -489,12 +502,12 @@ class MainActivity : AppCompatActivity() {
                 robot.setWifi(ssid, password)
                 handler.post {
                     binding.wifiSave.isEnabled = link.get() === robot
-                    binding.link.text = getString(R.string.wifi_saved, ssid)
+                    setLinkText(getString(R.string.wifi_saved, ssid))
                 }
             } catch (error: Exception) {
                 handler.post {
                     binding.wifiSave.isEnabled = link.get() === robot
-                    binding.link.text = error.message ?: getString(R.string.wifi_need_ssid)
+                    setLinkText(error.message ?: getString(R.string.wifi_need_ssid))
                 }
             }
         }
@@ -503,36 +516,36 @@ class MainActivity : AppCompatActivity() {
     private fun flashFirmware(uri: Uri) {
         val robot = link.get()
         if (robot == null || !robot.supports("firmware.begin")) {
-            binding.link.text = getString(R.string.firmware_need_link)
+            setLinkText(getString(R.string.firmware_need_link))
             return
         }
         val size = contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else -1L
         } ?: -1L
         if (size <= 0L) {
-            binding.link.text = getString(R.string.firmware_need_link)
+            setLinkText(getString(R.string.firmware_need_link))
             return
         }
         binding.firmwareFlash.isEnabled = false
         binding.wifiSave.isEnabled = false
-        binding.link.text = getString(R.string.firmware_uploading, 0)
+        setLinkText(getString(R.string.firmware_uploading, 0))
         io.execute {
             try {
                 contentResolver.openInputStream(uri)?.use { input ->
                     robot.installFirmware(input, size) { sent ->
                         val pct = ((sent * 100) / size).toInt().coerceIn(0, 100)
-                        handler.post { binding.link.text = getString(R.string.firmware_uploading, pct) }
+                        handler.post { setLinkText(getString(R.string.firmware_uploading, pct)) }
                     }
                 } ?: throw IllegalStateException("Can't open the firmware file")
                 handler.post {
                     disconnect()
-                    binding.link.text = getString(R.string.firmware_done)
+                    setLinkText(getString(R.string.firmware_done))
                 }
             } catch (error: Exception) {
                 handler.post {
                     binding.firmwareFlash.isEnabled = link.get()?.supports("firmware.begin") == true
                     binding.wifiSave.isEnabled = link.get()?.supports("wifi.set") == true
-                    binding.link.text = error.message ?: getString(R.string.firmware_need_link)
+                    setLinkText(error.message ?: getString(R.string.firmware_need_link))
                     if (link.get() === robot) {
                         // Upload may have rebooted the board already.
                         onLinkFailed(robot, error)
@@ -549,7 +562,7 @@ class MainActivity : AppCompatActivity() {
         binding.connectUsb.text = getString(R.string.connect_usb)
         binding.wifiSave.isEnabled = false
         binding.firmwareFlash.isEnabled = false
-        binding.link.text = getString(R.string.link_idle)
+        setLinkText(getString(R.string.link_idle))
         if (robot != null) release(robot)
     }
 
@@ -570,7 +583,7 @@ class MainActivity : AppCompatActivity() {
         binding.connectUsb.text = getString(R.string.connect_usb)
         binding.wifiSave.isEnabled = false
         binding.firmwareFlash.isEnabled = false
-        binding.link.text = error.message ?: getString(R.string.link_idle)
+        setLinkText(error.message ?: getString(R.string.link_idle))
         release(robot)
         Log.i(TAG, "robot link closed", error)
     }
@@ -830,6 +843,12 @@ class MainActivity : AppCompatActivity() {
         return uprightFieldOfView(rotation, uprightWidth, uprightHeight, sensorHfov, sensorVfov)
     }
 
+    private enum class Screen {
+        Eyes,
+        Debug,
+        Settings,
+    }
+
     companion object {
         private const val TAG = "Jiadroid"
         private const val HOLD_MS = 400L
@@ -842,6 +861,6 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_BRAIN_MODEL = "brain_model"
         private const val PREF_BRAIN_KEY = "brain_key"
         private const val DEFAULT_BRAIN_URL = "https://api.anthropic.com/v1"
-        private const val DEFAULT_BRAIN_MODEL = "claude-haiku-4-5"
+        private const val DEFAULT_BRAIN_MODEL = "claude-haiku-5-5"
     }
 }

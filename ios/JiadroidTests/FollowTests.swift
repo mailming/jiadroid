@@ -24,12 +24,12 @@ final class FollowTests: XCTestCase {
 
     func testWakeOpensAConversationWindow() {
         let session = AttentionSession(holdSeconds: 30)
-        let wake = session.consider(heard: "hey Lulu", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 1))
+        let wake = session.consider(heard: "hey Vicky", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 1))
         XCTAssertTrue(wake.addressed)
-        let followUp = session.consider(heard: "what do you see", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 5))
+        let followUp = session.consider(heard: "what do you see", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 5))
         XCTAssertTrue(followUp.addressed)
         XCTAssertEqual(followUp.utterance, "what do you see")
-        let late = session.consider(heard: "are you there", name: "lulu", requireName: true, now: Date(timeIntervalSince1970: 40))
+        let late = session.consider(heard: "are you there", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 40))
         XCTAssertFalse(late.addressed)
     }
 }

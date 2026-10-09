@@ -489,8 +489,8 @@ final class FollowSession: ObservableObject, CameraSink {
             defaults.set(voice.brainKey, forKey: Self.prefBrainKey)
         } else {
             voice.robotName = defaults.string(forKey: Self.prefRobotName) ?? defaultRobotName.capitalized
-            voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? ""
-            voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? ""
+            voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? Self.defaultBrainURL
+            voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? Self.defaultBrainModel
             voice.brainKey = defaults.string(forKey: Self.prefBrainKey) ?? ""
         }
         voiceSession?.robotName = voice.robotName
@@ -513,6 +513,8 @@ final class FollowSession: ObservableObject, CameraSink {
     private static let prefBrainURL = "brain_url"
     private static let prefBrainModel = "brain_model"
     private static let prefBrainKey = "brain_key"
+    private static let defaultBrainURL = "https://api.anthropic.com/v1"
+    private static let defaultBrainModel = "claude-haiku-5-5"
 }
 
 final class SimModel: ObservableObject {
@@ -557,8 +559,8 @@ final class VoiceModel: ObservableObject {
     @Published var say = ""
     @Published var emotion: Emotion = .listening
     @Published var robotName = defaultRobotName.capitalized
-    @Published var brainURL = ""
-    @Published var brainModel = ""
+    @Published var brainURL = "https://api.anthropic.com/v1"
+    @Published var brainModel = "claude-haiku-5-5"
     @Published var brainKey = ""
     @Published var brainStatus = "Replies come from the phone. Add a model URL for real conversation."
 }

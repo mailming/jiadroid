@@ -188,7 +188,7 @@ Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
 - A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
 - Follow Me logic that decides where the robot should go, and rescales that decision to any body.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default (mood from conversation), listen and answer out loud only after the wake name (default Lulu), keep talk and camera on a Debug screen with the simulated duck, and send motion to a linked chassis or laptop simulator. Android also maps clear spoken commands (stop / follow / turn / forward / back) to brief motion.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default (mood from conversation), listen and answer out loud only after the wake name (default Vicky), keep talk and camera on a Debug screen with the simulated duck, and send motion to a linked chassis or laptop simulator. Android also maps clear spoken commands (stop / follow / turn / forward / back) to brief motion.
 
 ## What is not built yet
 

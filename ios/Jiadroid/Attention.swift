@@ -1,14 +1,14 @@
 import Foundation
 
 /// Default wake name when the user has not assigned one.
-let defaultRobotName = "lulu"
+let defaultRobotName = "vicky"
 
 /// How long conversation stays open after the wake name (or each reply).
 let attentionHoldSeconds: TimeInterval = 30
 
 /// Whether a transcript is addressed to the robot, and the words after the wake name.
 ///
-/// Background chat is ignored until someone says the name (e.g. "hey Lulu, stop").
+/// Background chat is ignored until someone says the name (e.g. "hey Vicky, stop").
 /// After that, follow-ups without the name still count until `attentionHoldSeconds` of silence.
 struct Attention {
     let addressed: Bool

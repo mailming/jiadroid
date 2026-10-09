@@ -18,7 +18,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 ### Local audience memory (who is talking)
 
 - **Status:** spark  
-- **Why:** One short talk feels clever; remembering “you’re Jia, you like jokes, there’s a kid in the room” makes Lulu feel like *their* robot.  
+- **Why:** One short talk feels clever; remembering “you’re Jia, you like jokes, there’s a kid in the room” makes Vicky feel like *their* robot.  
 - **Idea:** On-phone audience KB (name, notes, last topics, soft `likelyKid` hint). Inject a tiny summary into local `reply()` / `Brain` system prompt. Clearable in Debug.  
 - **Voice tone:** Vosk / Apple Speech give text only — not man/woman/kid. Optional pitch band is a weak hint; better “who” = enroll voiceprints or fuse camera face size. Prefer self-intro (“I’m Sam”) over guessing gender.  
 - **Hard parts:** privacy (stay on device); don’t invent gender; keep prompt short so local models stay fast.
@@ -32,7 +32,7 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
   2. Vertical phone dock so the front camera faces people (or flip for back-camera mode).  
   3. Front / back camera switch + focus on the back lens when useful.  
   4. Wire bump (+ optional HC-SR04); phone soft-stops on bump / near range (chassis already announces sensors).  
-  5. Port Android spoken motion (`stop` / `follow` / turn) to iOS — today “Lulu, stop” only moves motors on Android.  
+  5. Port Android spoken motion (`stop` / `follow` / turn) to iOS — today “Vicky, stop” only moves motors on Android.  
   6. One rehearsed script + keep README “what’s built / not yet” in sync.  
 - **Hard parts:** hardware verification; iPhone still Wi‑Fi-only for the link.
 
@@ -91,17 +91,17 @@ The shared bet: **phone = brain, ESP32 body = muscles**, same protocol for many 
 
 - **Status:** building (core app exists)  
 - Current Android/iOS Follow Me with eyes UI, voice, USB-C/Wi‑Fi link to chassis.
-- Wake name (default **Lulu**, user-assignable) so it only answers when addressed.
+- Wake name (default **Vicky**, user-assignable) so it only answers when addressed.
 
 ### Wake name / attention
 
 - **Status:** shipped  
-- Ignore ambient talk until someone says the robot’s name (`hey Lulu, …`). That opens ~30s of conversation without repeating the name; each answered turn refreshes the window. Typed Debug lines skip the gate.
+- Ignore ambient talk until someone says the robot’s name (`hey Vicky, …`). That opens ~30s of conversation without repeating the name; each answered turn refreshes the window. Typed Debug lines skip the gate.
 
 ### Expressive eyes (medium) driven by conversation emotion
 
 - **Status:** shipped  
-- **Why:** The eyes are the face; blink/idle alone helps, but matching mood to talk makes Lulu feel alive.
+- **Why:** The eyes are the face; blink/idle alone helps, but matching mood to talk makes Vicky feel alive.
 - **Idea:** Keep a tiny emotion enum for the face (`neutral`, `happy`, `curious`, `listening`, `thinking`, `confused`, `sad`, `excited`). Conversation returns **text + emotion**:
   - Local `reply()` / wake “Yes?” → fixed mapping (greeting → happy, name-only → curious, lost person → confused).
   - Cloud `Brain` → ask for a short JSON or trailing tag, e.g. `{"say":"…","emotion":"happy"}`, or `… <<happy>>` stripped before TTS.
