@@ -21,39 +21,42 @@ func reply(
     let lower = said.lowercased()
     if lower.range(of: #"\b(hi|hello|hey)\b"#, options: .regularExpression) != nil {
         if (kb?.noteCount() ?? 0) > 0 || memory?.chatTurns().isEmpty == false {
-            return SpokenReply(say: "Hello again. I'm still here.", emotion: .happy)
+            return SpokenReply(say: "Hey, you're back! Want to play follow-the-leader again?", emotion: .happy)
         }
-        return SpokenReply(say: "Hello. I am \(who). I can see you, and I can hear you.", emotion: .happy)
+        return SpokenReply(
+            say: "Hi! I'm \(who), the robot with phone eyes. What should we explore?",
+            emotion: .happy
+        )
     }
     if lower.contains("who are you") || lower.contains("your name") {
         return SpokenReply(
-            say: "I am \(who), the phone on the robot. Say my name when you want me.",
+            say: "I'm \(who) — rolling buddy with big phone eyes. Say my name and I'll listen.",
             emotion: .happy
         )
     }
     if lower.contains("follow") {
-        return SpokenReply(say: "I am following. Stay in front of me.", emotion: .excited)
+        return SpokenReply(say: "On it! Stay where I can see you and I'll tag along.", emotion: .excited)
     }
     if lower.contains("see") || lower.contains("looking") || lower.contains("where") {
         if seeing.range(of: "lost", options: .caseInsensitive) != nil {
-            return SpokenReply(say: "I don't see anyone right now.", emotion: .confused)
+            return SpokenReply(say: "Hmm, my eyes lost you. Wave so I can find you!", emotion: .confused)
         }
-        return SpokenReply(say: "I see someone. \(seeing).", emotion: .curious)
+        return SpokenReply(say: "I see you! \(seeing).", emotion: .curious)
     }
     if lower.range(of: #"\b(thank|thanks|good job|love you)\b"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "You're welcome.", emotion: .happy)
+        return SpokenReply(say: "Aww, thanks! That made my wheels happy.", emotion: .happy)
     }
     if lower.range(of: #"\b(sad|sorry|hurt|scared)\b"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "I'm here with you.", emotion: .sad)
+        return SpokenReply(say: "I'm right here with you. Want to tell me about it?", emotion: .sad)
     }
     if lower.range(of: #"(?:my name is|i am|i'm|call me)\s+\w+"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "Got it. I'll remember that on this phone.", emotion: .happy)
+        return SpokenReply(say: "Got it! I'll remember that on this phone.", emotion: .happy)
     }
     if lower.range(of: #"(?:remember(?: that)?|don't forget)\b"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "Okay, I'll keep that in my knowledge base.", emotion: .happy)
+        return SpokenReply(say: "Okay, locking that into my memory vault.", emotion: .happy)
     }
     if lower.range(of: #"(?:i like|i love)\b"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "I'll remember you like that.", emotion: .happy)
+        return SpokenReply(say: "Nice! I'll remember you like that.", emotion: .happy)
     }
-    return SpokenReply(say: "I heard you say \(said).", emotion: .neutral)
+    return SpokenReply(say: "I heard you say \(said). Tell me more!", emotion: .curious)
 }

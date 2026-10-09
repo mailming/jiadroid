@@ -110,15 +110,15 @@ class FollowTest {
     @Test
     fun greetingIsSpokenBack() {
         val spoken = reply("hello there", "Person is centered")
-        assertEquals("Hello. I am Vicky. I can see you, and I can hear you.", spoken.say)
+        assertEquals("Hi! I'm Vicky, the robot with phone eyes. What should we explore?", spoken.say)
         assertEquals(Emotion.HAPPY, spoken.emotion)
     }
 
     @Test
     fun askingWhatItSeesUsesTheCamera() {
-        assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost").say)
+        assertEquals("Hmm, my eyes lost you. Wave so I can find you!", reply("what do you see", "Person is lost").say)
         assertEquals(Emotion.CONFUSED, reply("what do you see", "Person is lost").emotion)
-        assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left").say)
+        assertEquals("I see you! Person is left.", reply("what are you looking at", "Person is left").say)
     }
 
     @Test

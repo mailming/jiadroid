@@ -331,7 +331,7 @@ enum FollowLogicTests {
 
         try expect(
             reply(heard: "hello there", seeing: "Person is centered").say
-                == "Hello. I am Vicky. I can see you, and I can hear you.",
+                == "Hi! I'm Vicky, the robot with phone eyes. What should we explore?",
             "greeting"
         )
         try expect(!parseAttention(heard: "what do you see", name: "vicky").addressed, "wake required")
