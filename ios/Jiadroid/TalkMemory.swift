@@ -17,14 +17,29 @@ final class TalkMemory {
     }
 
     func rememberExchange(user: String, assistant: String) {
+        rememberUser(user)
+        rememberAssistant(assistant)
+    }
+
+    /// Stage the user line before calling the model so history includes this turn.
+    func rememberUser(_ user: String) {
         let you = user.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        let me = assistant.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        if you.isEmpty { return }
         lock.lock()
         defer { lock.unlock() }
-        if !you.isEmpty { add(role: "user", text: you) }
-        if !me.isEmpty { add(role: "assistant", text: me) }
+        if let last = messages.last, last.role == "user", last.text == you { return }
+        if messages.last?.role == "user" { messages.removeLast() }
+        add(role: "user", text: you)
+    }
+
+    func rememberAssistant(_ assistant: String) {
+        let me = assistant.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        if me.isEmpty { return }
+        lock.lock()
+        defer { lock.unlock() }
+        add(role: "assistant", text: me)
     }
 
     func chatTurns() -> [TalkTurn] {

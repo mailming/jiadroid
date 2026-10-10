@@ -10,9 +10,12 @@ let attentionHoldSeconds: TimeInterval = 30
 ///
 /// Background chat is ignored until someone says the name (e.g. "hey Vicky, stop").
 /// After that, follow-ups without the name still count until `attentionHoldSeconds` of silence.
+/// `newConversation` is true when a wake re-opens the window after it had closed — short-term
+/// talk can reset, but the persistent audience profile (`AudienceKb`) must stay.
 struct Attention {
     let addressed: Bool
     let utterance: String
+    var newConversation: Bool = false
 }
 
 func normalizeRobotName(_ name: String) -> String {
@@ -68,21 +71,25 @@ final class AttentionSession {
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         if !requireName {
             touch(now)
-            return Attention(addressed: true, utterance: said)
+            return Attention(addressed: true, utterance: said, newConversation: false)
         }
+        lock.lock()
+        let idle = now >= engagedUntil
+        lock.unlock()
         let parsed = parseAttention(heard: said, name: name)
         if parsed.addressed {
             touch(now)
-            return parsed
+            return Attention(
+                addressed: true,
+                utterance: parsed.utterance,
+                newConversation: idle
+            )
         }
-        lock.lock()
-        let open = now < engagedUntil
-        lock.unlock()
-        if open {
+        if !idle {
             touch(now)
-            return Attention(addressed: true, utterance: said)
+            return Attention(addressed: true, utterance: said, newConversation: false)
         }
-        return Attention(addressed: false, utterance: said)
+        return Attention(addressed: false, utterance: said, newConversation: false)
     }
 
     private func touch(_ now: Date) {

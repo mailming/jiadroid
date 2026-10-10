@@ -1,6 +1,9 @@
 import Foundation
 
-/// Persistent on-phone audience knowledge base.
+/// Persistent on-phone audience knowledge base (personal profile).
+///
+/// Survives wake-window expiry, new conversations, and app restarts. Only short-term
+/// `TalkMemory` resets when a new wake opens after silence.
 ///
 /// - **Pin:** `name`, `likes`, `from`, and compacted `summary` never expire or get FIFO'd.
 /// - **Cap:** at most `maxFacts` freeform `fact-*` notes.
@@ -120,7 +123,7 @@ final class AudienceKb {
         if maintainLocked() { persistLocked() }
         if notes.isEmpty { return "" }
         let lines = orderedNotes().map { "- \($0.key): \($0.value)" }.joined(separator: "\n")
-        return "Audience knowledge base (persistent on this phone):\n\(lines)"
+        return "Audience profile (persistent across wake windows and app restarts):\n\(lines)"
     }
 
     func recallReply(heard: String) -> SpokenReply? {
@@ -129,14 +132,17 @@ final class AudienceKb {
         lock.lock()
         defer { lock.unlock() }
         if maintainLocked() { persistLocked() }
-        if lower.range(of: #"\b(what('s| is) my name|who am i)\b"#, options: .regularExpression) != nil {
+        if lower.range(
+            of: #"\b(what('s| is) my name|who am i|do you (know|remember) my name)\b"#,
+            options: .regularExpression
+        ) != nil {
             if let name = notes["name"]?.value, !name.isEmpty {
                 return SpokenReply(say: "You're \(name).", emotion: .happy)
             }
             return SpokenReply(say: "I don't know your name yet. Tell me, and I'll remember.", emotion: .curious)
         }
         if lower.range(
-            of: #"\b(what do you remember|what do you know about me|what have i told you)\b"#,
+            of: #"\b(what do you remember|what do you know about me|what have i told you|do you remember (anything|me))\b"#,
             options: .regularExpression
         ) != nil {
             if notes.isEmpty {
@@ -190,11 +196,30 @@ final class AudienceKb {
                 changed = true
             }
         }
+        if let match = firstMatch(
+            lower,
+            pattern: #"(?:my favorite|my favourite)\s+([a-z][a-z\s]{0,24}?)\s+is\s+(.+?)(?:[.!]|$)"#
+        ), match.count >= 3 {
+            let kind = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = match[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !kind.isEmpty && (2...80).contains(value.count) {
+                putFact("favorite \(kind) is \(value)", at: now)
+                changed = true
+            }
+        }
         if let match = firstMatch(lower, pattern: #"(?:i live in|i'm from|i am from)\s+(.+?)(?:[.!]|$)"#),
            match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...80).contains(value.count) {
                 putPinned(key: "from", value: value, at: now)
+                changed = true
+            }
+        }
+        if let match = firstMatch(lower, pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!]|$)"#),
+           match.count >= 2 {
+            let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if (2...80).contains(value.count) {
+                putFact("has \(value)", at: now)
                 changed = true
             }
         }

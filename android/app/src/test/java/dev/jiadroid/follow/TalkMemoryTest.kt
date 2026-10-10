@@ -21,6 +21,17 @@ class TalkMemoryTest {
     }
 
     @Test
+    fun stagesUserBeforeAssistantWithoutDuplicating() {
+        val memory = TalkMemory()
+        memory.rememberUser("My name is Jia")
+        memory.rememberUser("My name is Jia")
+        assertEquals(1, memory.chatTurns().size)
+        memory.rememberAssistant("Nice to meet you Jia.")
+        assertEquals(2, memory.chatTurns().size)
+        assertEquals("assistant", memory.chatTurns().last().role)
+    }
+
+    @Test
     fun capsMessageHistory() {
         val memory = TalkMemory(maxMessages = 4)
         repeat(5) { i ->
@@ -43,7 +54,7 @@ class AudienceKbTest {
 
         val second = AudienceKb(loadJson = { stored }, saveJson = { stored = it })
         assertEquals("You're Jia.", second.recallReply("what's my name")?.say)
-        assertTrue(second.promptBlock().contains("Audience knowledge base"))
+        assertTrue(second.promptBlock().contains("Audience profile"))
     }
 
     @Test
@@ -53,6 +64,19 @@ class AudienceKbTest {
         kb.rememberFrom("Remember that the wifi password is orchid")
         assertTrue(kb.promptBlock().contains("wifi password is orchid"))
         assertTrue(kb.recallReply("what do you remember")!!.say.contains("orchid"))
+    }
+
+    @Test
+    fun remembersFavoritesAndHasPhrases() {
+        var stored: String? = null
+        val kb = AudienceKb(loadJson = { stored }, saveJson = { stored = it })
+        kb.rememberFrom("My favorite color is blue")
+        kb.rememberFrom("I have a dog named Spot")
+        kb.rememberFrom("My name is Jia")
+        val block = kb.promptBlock()
+        assertTrue(block.contains("favorite color is blue"))
+        assertTrue(block.contains("dog named spot"))
+        assertEquals("You're Jia.", kb.recallReply("do you remember my name")!!.say)
     }
 
     @Test

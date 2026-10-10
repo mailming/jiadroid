@@ -11,10 +11,27 @@ class TalkMemory(
 
     @Synchronized
     fun rememberExchange(user: String, assistant: String) {
+        rememberUser(user)
+        rememberAssistant(assistant)
+    }
+
+    /** Stage the user line before calling the model so history includes this turn. */
+    @Synchronized
+    fun rememberUser(user: String) {
         val you = user.trim().replace(Regex("""\s+"""), " ")
+        if (you.isEmpty()) return
+        val last = messages.lastOrNull()
+        if (last?.role == "user" && last.text == you) return
+        // Drop an orphan user turn (e.g. reply never finished) so roles stay alternating.
+        if (last?.role == "user") messages.removeLast()
+        add("user", you)
+    }
+
+    @Synchronized
+    fun rememberAssistant(assistant: String) {
         val me = assistant.trim().replace(Regex("""\s+"""), " ")
-        if (you.isNotEmpty()) add("user", you)
-        if (me.isNotEmpty()) add("assistant", me)
+        if (me.isEmpty()) return
+        add("assistant", me)
     }
 
     @Synchronized

@@ -44,7 +44,7 @@ class VoiceSession(
             activity.getSharedPreferences(KB_PREFS, AppCompatActivity.MODE_PRIVATE)
                 .edit()
                 .putString(KB_KEY, json)
-                .apply()
+                .commit()
         },
     )
     private var speech: SpeechRecognizer? = null
@@ -55,6 +55,8 @@ class VoiceSession(
     private var readyToSpeak = false
     private var speakGeneration = 0
     private var restartGeneration = 0
+    private var lastSpoken = ""
+    private var ignoreHearUntilMs = 0L
     private val attention = AttentionSession()
 
     private val listener = object : RecognitionListener {
@@ -104,7 +106,8 @@ class VoiceSession(
             if (!text.isNullOrBlank() && alive && !speaking) {
                 answer(text)
             }
-            scheduleListen()
+            // answer() sets speaking while the model thinks; resume() restarts the mic.
+            if (!speaking) scheduleListen()
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
@@ -224,10 +227,12 @@ class VoiceSession(
     private fun resume() {
         speaking = false
         speakGeneration += 1
+        // Room echo of our own TTS often lands right after playback ends.
+        ignoreHearUntilMs = SystemClock.elapsedRealtime() + ECHO_COOLDOWN_MS
         if (!alive) return
         onEmotion(Emotion.LISTENING)
         onLine("Listening")
-        scheduleListen(delayMs = 250L)
+        scheduleListen(delayMs = ECHO_COOLDOWN_MS)
     }
 
     /**
@@ -237,15 +242,23 @@ class VoiceSession(
      */
     fun answer(heard: String, requireName: Boolean = true) {
         if (speaking) return
+        if (SystemClock.elapsedRealtime() < ignoreHearUntilMs) return
         if (isNoise(heard)) return
+        if (isEchoOfSelf(heard)) return
         val name = normalizeRobotName(robotName)
         val gate = attention.consider(heard, name, requireName, SystemClock.elapsedRealtime())
         if (!gate.addressed) return
+        // New wake after the hold expired: clear short-term chat only. AudienceKb
+        // (name / likes / facts) stays on disk and is reloaded for this conversation.
+        if (gate.newConversation) {
+            memory.clear()
+            kb.reload()
+        }
         onTurn("You", heard)
         if (gate.utterance.isEmpty()) {
             speaking = true
             cancelListen()
-            speak(SpokenReply("Yes?", Emotion.CURIOUS), rememberUser = null)
+            speak(SpokenReply("Yes?", Emotion.CURIOUS), rememberUser = null, userAlreadyStaged = false)
             return
         }
         parseVoiceAction(gate.utterance)?.let { action ->
@@ -257,15 +270,20 @@ class VoiceSession(
         val seen = seeing()
         val request = gate.utterance
         // Deterministic KB / short-term recall before spending a model call.
+        // Do this before staging the new user turn so "what did I just say" still works.
         val localRecall = kb.recallReply(request) ?: memory.recallReply(request)
         if (localRecall != null) {
-            speak(localRecall, rememberUser = request)
+            speak(localRecall, rememberUser = request, userAlreadyStaged = false)
             return
         }
+        // Absorb facts and stage this user line BEFORE the model runs so the KB
+        // and chat history are visible on this same turn.
+        kb.rememberFrom(request)
+        memory.rememberUser(request)
         val brain = brain
         if (brain == null) {
             val spoken = reply(request, seen, name, memory, kb)
-            speak(spoken, rememberUser = request)
+            speak(spoken, rememberUser = request, userAlreadyStaged = true)
             return
         }
         onEmotion(Emotion.THINKING)
@@ -277,15 +295,23 @@ class VoiceSession(
                 activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
                 reply(request, seen, name, memory, kb)
             }
-            activity.runOnUiThread { speak(spoken, rememberUser = request) }
+            activity.runOnUiThread {
+                speak(spoken, rememberUser = request, userAlreadyStaged = true)
+            }
         }
     }
 
-    private fun speak(spoken: SpokenReply, rememberUser: String?) {
+    private fun speak(spoken: SpokenReply, rememberUser: String?, userAlreadyStaged: Boolean) {
         if (rememberUser != null) {
-            kb.rememberFrom(rememberUser)
-            memory.rememberExchange(rememberUser, spoken.say)
+            if (userAlreadyStaged) {
+                memory.rememberAssistant(spoken.say)
+            } else {
+                kb.rememberFrom(rememberUser)
+                memory.rememberExchange(rememberUser, spoken.say)
+            }
         }
+        cancelListen()
+        lastSpoken = spoken.say
         onEmotion(spoken.emotion)
         onTurn("Me", spoken.say)
         onLine(spoken.say)
@@ -298,8 +324,12 @@ class VoiceSession(
             resume()
             return
         }
+        // Safety valve: stop TTS then cool down — never open the mic while still talking.
         main.postDelayed({
-            if (speaking && generation == speakGeneration) resume()
+            if (speaking && generation == speakGeneration) {
+                speaker.stop()
+                resume()
+            }
         }, SPEAK_LIMIT_MS)
     }
 
@@ -308,6 +338,25 @@ class VoiceSession(
         return words.isEmpty() || words.all { it in NOISE }
     }
 
+    /** Drop transcripts that look like the mic picked up our own loudspeaker. */
+    private fun isEchoOfSelf(heard: String): Boolean {
+        val spoken = normalizeForEcho(lastSpoken)
+        val mine = normalizeForEcho(heard)
+        if (spoken.isEmpty() || mine.isEmpty()) return false
+        if (spoken.contains(mine) || mine.contains(spoken.take(48))) return true
+        val heardWords = mine.split(' ').filter { it.length > 2 }.toSet()
+        val spokenWords = spoken.split(' ').filter { it.length > 2 }.toSet()
+        if (heardWords.isEmpty()) return false
+        val hit = heardWords.count { it in spokenWords }
+        return hit.toDouble() / heardWords.size >= 0.6
+    }
+
+    private fun normalizeForEcho(text: String): String =
+        text.lowercase()
+            .replace(Regex("""[^a-z0-9\s]+"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
     private fun bestResult(results: Bundle?): String? {
         val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
         return matches?.firstOrNull { !it.isNullOrBlank() }?.trim()
@@ -315,7 +364,8 @@ class VoiceSession(
 
     private companion object {
         const val TAG = "Jiadroid"
-        const val SPEAK_LIMIT_MS = 8000L
+        const val SPEAK_LIMIT_MS = 10_000L
+        const val ECHO_COOLDOWN_MS = 800L
         const val KB_PREFS = "jiadroid_audience_kb"
         const val KB_KEY = "notes_json"
         val NOISE = setOf("huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an")

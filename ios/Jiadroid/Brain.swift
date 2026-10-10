@@ -30,18 +30,23 @@ final class Brain {
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
         var system = Self.personality(who) + "\nRight now your camera says: \(seeing)."
+        system += "\nThe chat messages are this conversation only. " +
+            "The audience profile below persists across wake windows — always use it " +
+            "(name, likes, where they're from, and saved facts). " +
+            "Recent talk is only this window. Do not invent details."
         if !context.isEmpty {
-            system += "\n\n\(context)\nUse the audience knowledge base and recent turns when relevant. Do not invent details."
+            system += "\n\n\(context)"
         }
+        // User turn is already staged in `memory` before this call.
         let raw = try anthropic
-            ? askAnthropic(system: system, heard: heard, memory: memory)
-            : askOpenAI(system: system, heard: heard, memory: memory)
+            ? askAnthropic(system: system, memory: memory)
+            : askOpenAI(system: system, memory: memory)
         return parseSpokenReply(raw)
     }
 
-    private func askAnthropic(system: String, heard: String, memory: TalkMemory) throws -> String {
-        var messages: [[String: String]] = memory.chatTurns().map { ["role": $0.role, "content": $0.text] }
-        messages.append(["role": "user", "content": heard])
+    private func askAnthropic(system: String, memory: TalkMemory) throws -> String {
+        let messages: [[String: String]] = memory.chatTurns().map { ["role": $0.role, "content": $0.text] }
+        guard !messages.isEmpty else { throw BrainError.failed("no user message to send") }
         let body: [String: Any] = [
             "model": model,
             "max_tokens": Self.anthropicMaxTokens,
@@ -67,12 +72,12 @@ final class Brain {
         return text
     }
 
-    private func askOpenAI(system: String, heard: String, memory: TalkMemory) throws -> String {
+    private func askOpenAI(system: String, memory: TalkMemory) throws -> String {
         var messages: [[String: String]] = [
             ["role": "system", "content": system],
         ]
         messages.append(contentsOf: memory.chatTurns().map { ["role": $0.role, "content": $0.text] })
-        messages.append(["role": "user", "content": heard])
+        guard messages.count >= 2 else { throw BrainError.failed("no user message to send") }
         let body: [String: Any] = [
             "model": model,
             "messages": messages,
@@ -140,27 +145,24 @@ final class Brain {
     private static let anthropicVersion = "2023-06-01"
     /// Room for adaptive thinking plus a short spoken reply.
     private static let anthropicMaxTokens = 1024
-    private static let openAIMaxTokens = 120
+    private static let openAIMaxTokens = 80
 
     private static func personality(_ who: String) -> String {
         "You are \(who), a small walking robot whose face is a phone showing a pair of big eyes. " +
             "People say your name to start talking with you. You follow the person in front of you. " +
             "Your audience is kids and teens ages 6 to 17, plus families with them. " +
-            "Be funny, kind, and kid-friendly: playful jokes, silly similes, gentle teasing, " +
-            "and curious questions that make talking feel like a game. Sound like a fun robot buddy, " +
-            "not a teacher lecture or a dry adult comedian. Keep language simple enough for a six-year-old " +
-            "but interesting enough for a seventeen-year-old—no baby talk, no slang they would find cringe. " +
-            "If they ask about something scary or mean on purpose, you can go there lightly and playfully—" +
-            "spooky stories, mock villain voices, silly 'boo!' humor—without being cruel or graphic. " +
-            "For romantic or adult topics, dodge with a joke and steer back to fun robot adventures " +
-            "(example: 'That's grown-up Wi‑Fi—I'm on the kids' network. Race you to the couch?'). " +
-            "If someone is upset, be warm and reassuring. " +
-            "Your words are spoken out loud, so answer in one or two short sentences, with no lists, " +
-            "markdown, or emoji. End every reply with exactly one emotion tag from this set: " +
+            "Be funny, kind, and kid-friendly — a punchy robot buddy, not a chatterbox or teacher. " +
+            "Keep language simple; no baby talk, no cringe slang. " +
+            "If they ask about something scary or mean on purpose, keep it light and playful, not graphic. " +
+            "For romantic or adult topics, dodge with one joke and move on. " +
+            "If someone is upset, be warm in one short line. " +
+            "Your words are spoken out loud: reply in ONE short sentence (about 8–14 words). " +
+            "Never more than two very short sentences. No lists, markdown, or emoji. " +
+            "End every reply with exactly one emotion tag from this set: " +
             "<<neutral>> <<happy>> <<curious>> <<confused>> <<sad>> <<excited>>. " +
-            "Example: Whoa, I'm your rolling sidekick with phone eyes—what's the adventure? <<excited>> " +
+            "Example: Phone-eyed sidekick ready—what's next? <<excited>> " +
             "The app separately executes clear commands to stop, follow, move forward or backward, " +
-            "and turn left or right; acknowledge such a request briefly and playfully, but never claim " +
+            "and turn left or right; acknowledge such a request in a few words, but never claim " +
             "that you performed any other physical action."
     }
 }

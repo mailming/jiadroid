@@ -11,8 +11,14 @@ const val ATTENTION_HOLD_MS = 30_000L
  *
  * Background chat is ignored until someone says the name (e.g. "hey Vicky, stop").
  * After that, follow-ups without the name still count until [ATTENTION_HOLD_MS] of silence.
+ * [newConversation] is true when a wake re-opens the window after it had closed — short-term
+ * talk can reset, but the persistent audience profile ([AudienceKb]) must stay.
  */
-data class Attention(val addressed: Boolean, val utterance: String)
+data class Attention(
+    val addressed: Boolean,
+    val utterance: String,
+    val newConversation: Boolean = false,
+)
 
 fun normalizeRobotName(name: String): String {
     val cleaned = name.trim().lowercase().replace(Regex("""\s+"""), " ")
@@ -51,18 +57,19 @@ class AttentionSession(private val holdMs: Long = ATTENTION_HOLD_MS) {
         val said = heard.trim().replace(Regex("""\s+"""), " ")
         if (!requireName) {
             touch(nowMs)
-            return Attention(true, said)
+            return Attention(true, said, newConversation = false)
         }
+        val idle = nowMs >= engagedUntilMs
         val parsed = parseAttention(said, name)
         if (parsed.addressed) {
             touch(nowMs)
-            return parsed
+            return parsed.copy(newConversation = idle)
         }
-        if (nowMs < engagedUntilMs) {
+        if (!idle) {
             touch(nowMs)
-            return Attention(true, said)
+            return Attention(true, said, newConversation = false)
         }
-        return Attention(false, said)
+        return Attention(false, said, newConversation = false)
     }
 
     private fun touch(nowMs: Long) {

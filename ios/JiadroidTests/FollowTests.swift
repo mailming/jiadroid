@@ -26,10 +26,21 @@ final class FollowTests: XCTestCase {
         let session = AttentionSession(holdSeconds: 30)
         let wake = session.consider(heard: "hey Vicky", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 1))
         XCTAssertTrue(wake.addressed)
+        XCTAssertTrue(wake.newConversation)
         let followUp = session.consider(heard: "what do you see", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 5))
         XCTAssertTrue(followUp.addressed)
+        XCTAssertFalse(followUp.newConversation)
         XCTAssertEqual(followUp.utterance, "what do you see")
         let late = session.consider(heard: "are you there", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 40))
         XCTAssertFalse(late.addressed)
+        let rewake = session.consider(
+            heard: "hey Vicky, what's my name",
+            name: "vicky",
+            requireName: true,
+            now: Date(timeIntervalSince1970: 41)
+        )
+        XCTAssertTrue(rewake.addressed)
+        XCTAssertTrue(rewake.newConversation)
+        XCTAssertEqual(rewake.utterance, "what's my name")
     }
 }

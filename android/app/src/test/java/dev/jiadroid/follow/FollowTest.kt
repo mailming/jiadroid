@@ -139,12 +139,18 @@ class FollowTest {
         val session = AttentionSession(holdMs = 30_000L)
         val wake = session.consider("hey Vicky", "vicky", requireName = true, nowMs = 1_000L)
         assertTrue(wake.addressed)
+        assertTrue(wake.newConversation)
         assertEquals("", wake.utterance)
         val followUp = session.consider("what do you see", "vicky", requireName = true, nowMs = 5_000L)
         assertTrue(followUp.addressed)
+        assertFalse(followUp.newConversation)
         assertEquals("what do you see", followUp.utterance)
         val late = session.consider("are you there", "vicky", requireName = true, nowMs = 40_000L)
         assertFalse(late.addressed)
+        val rewake = session.consider("hey Vicky, what's my name", "vicky", requireName = true, nowMs = 41_000L)
+        assertTrue(rewake.addressed)
+        assertTrue(rewake.newConversation)
+        assertEquals("what's my name", rewake.utterance)
     }
 
     @Test

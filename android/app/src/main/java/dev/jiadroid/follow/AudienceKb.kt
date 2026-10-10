@@ -1,7 +1,10 @@
 package dev.jiadroid.follow
 
 /**
- * Persistent on-phone audience knowledge base.
+ * Persistent on-phone audience knowledge base (personal profile).
+ *
+ * Survives wake-window expiry, new conversations, and app restarts. Only short-term
+ * [TalkMemory] resets when a new wake opens after silence.
  *
  * - **Pin:** `name`, `likes`, `from`, and compacted `summary` never expire or get FIFO'd.
  * - **Cap:** at most [maxFacts] freeform `fact-*` notes.
@@ -77,7 +80,7 @@ class AudienceKb(
         if (changed) persist()
         if (notes.isEmpty()) return ""
         val lines = orderedNotes().joinToString("\n") { "- ${it.key}: ${it.value}" }
-        return "Audience knowledge base (persistent on this phone):\n$lines"
+        return "Audience profile (persistent across wake windows and app restarts):\n$lines"
     }
 
     @Synchronized
@@ -86,7 +89,9 @@ class AudienceKb(
         if (lower.isEmpty()) return null
         val changed = maintain()
         if (changed) persist()
-        if (Regex("""\b(what('s| is) my name|who am i)\b""").containsMatchIn(lower)) {
+        if (Regex("""\b(what('s| is) my name|who am i|do you (know|remember) my name)\b""")
+                .containsMatchIn(lower)
+        ) {
             val name = notes["name"]?.value
             return if (name.isNullOrBlank()) {
                 SpokenReply("I don't know your name yet. Tell me, and I'll remember.", Emotion.CURIOUS)
@@ -94,8 +99,9 @@ class AudienceKb(
                 SpokenReply("You're $name.", Emotion.HAPPY)
             }
         }
-        if (Regex("""\b(what do you remember|what do you know about me|what have i told you)\b""")
-                .containsMatchIn(lower)
+        if (Regex(
+                """\b(what do you remember|what do you know about me|what have i told you|do you remember (anything|me))\b""",
+            ).containsMatchIn(lower)
         ) {
             if (notes.isEmpty()) {
                 return SpokenReply(
@@ -138,8 +144,20 @@ class AudienceKb(
             putPinned("likes", it, now)
             changed = true
         }
+        FAVORITE.find(lower)?.groupValues?.let { groups ->
+            val kind = groups.getOrNull(1)?.trim().orEmpty()
+            val value = groups.getOrNull(2)?.trim().orEmpty()
+            if (kind.isNotEmpty() && value.length in 2..80) {
+                putFact("favorite $kind is $value", now)
+                changed = true
+            }
+        }
         PLACE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let {
             putPinned("from", it, now)
+            changed = true
+        }
+        HAVE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let { thing ->
+            putFact("has $thing", now)
             changed = true
         }
         REMEMBER.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..120 }?.let { fact ->
@@ -289,7 +307,11 @@ class AudienceKb(
             "going", "coming", "done", "trying", "looking", "listening", "thinking",
         )
         val LIKE = Regex("""(?:i like|i love)\s+(.+?)(?:[.!?]|$)""")
+        val FAVORITE = Regex(
+            """(?:my favorite|my favourite)\s+([a-z][a-z\s]{0,24}?)\s+is\s+(.+?)(?:[.!?]|$)""",
+        )
         val PLACE = Regex("""(?:i live in|i'm from|i am from)\s+(.+?)(?:[.!?]|$)""")
+        val HAVE = Regex("""(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!?]|$)""")
         val REMEMBER = Regex("""(?:remember(?: that)?|don't forget(?: that)?)\s+(.+?)(?:[.!?]|$)""")
     }
 }
