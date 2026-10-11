@@ -35,9 +35,9 @@ data class VoiceAction(val motion: VoiceMotion) {
         VoiceMotion.BACKWARD ->
             FollowDecision("Voice command: backward", "BACKWARD", -0.06f, 0f, 0f, 0f)
         VoiceMotion.TURN_LEFT ->
-            FollowDecision("Voice command: turn left", "TURN LEFT", 0f, 0f, 0.7f, -0.4f)
+            FollowDecision("Voice command: turn left", "TURN LEFT", 0.12f, 0f, 0.40f, -0.4f)
         VoiceMotion.TURN_RIGHT ->
-            FollowDecision("Voice command: turn right", "TURN RIGHT", 0f, 0f, -0.7f, 0.4f)
+            FollowDecision("Voice command: turn right", "TURN RIGHT", 0.12f, 0f, -0.40f, 0.4f)
     }
 
     val durationMs: Long

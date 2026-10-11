@@ -18,8 +18,8 @@ constexpr int TICKS_PER_REV = ENCODER_SLOTS * GEAR_RATIO;
 constexpr double MAX_FORWARD_M_S = 0.40;
 constexpr double MAX_YAW_RAD_S = 1.5;
 constexpr double MAX_WHEEL_RAD_S = MAX_FORWARD_M_S / WHEEL_RADIUS_M;
-// L9110S + these gearmotors stall/beep below ~40% PWM (search yaw, slow crawl).
-constexpr int MIN_MOTOR_DUTY = 110;
+// L9110S + these gearmotors stall/beep below ~50% PWM (in-place yaw, slow crawl).
+constexpr int MIN_MOTOR_DUTY = 130;
 constexpr double RANGE_MAX_M = 2.0;
 
 // Phone standing on the top plate. Matches the `top` mount in the simulator.

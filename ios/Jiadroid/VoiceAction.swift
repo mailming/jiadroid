@@ -39,9 +39,9 @@ struct VoiceAction {
         case .backward:
             return FollowDecision(situation: "Voice command: backward", command: "BACKWARD", forward: -0.06, lateral: 0, yaw: 0, headYaw: 0)
         case .turnLeft:
-            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0, lateral: 0, yaw: 0.7, headYaw: -0.4)
+            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0.12, lateral: 0, yaw: 0.40, headYaw: -0.4)
         case .turnRight:
-            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0, lateral: 0, yaw: -0.7, headYaw: 0.4)
+            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0.12, lateral: 0, yaw: -0.40, headYaw: 0.4)
         }
     }
 

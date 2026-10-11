@@ -320,10 +320,33 @@ class MainActivity : AppCompatActivity() {
     /** Debug pad: hold the chosen move until Stop or another button. */
     private fun applyManual(decision: FollowDecision) {
         lostSearch.clear()
+        val previous = voiceDecision
         voiceDecision = decision
         voiceActionUntil = Long.MAX_VALUE
         lastCommandKey = null
-        send(decision, force = true)
+        // Coast briefly when flipping drive direction so the L9110S/motors
+        // are not asked to reverse under load (Left→Back often failed that way).
+        if (previous != null && manualNeedsCoast(previous, decision)) {
+            send(ManualControl.stop(), force = true)
+            handler.postDelayed({
+                if (voiceDecision === decision) send(decision, force = true)
+            }, 100L)
+        } else {
+            send(decision, force = true)
+        }
+    }
+
+    private fun manualNeedsCoast(previous: FollowDecision, next: FollowDecision): Boolean {
+        if (next.command == "STOP" || previous.command == "STOP") return false
+        val prevForward = previous.forward != 0f
+        val nextForward = next.forward != 0f
+        if (prevForward && nextForward && previous.forward > 0f != next.forward > 0f) return true
+        val prevTurn = previous.yaw != 0f
+        val nextTurn = next.yaw != 0f
+        if (prevTurn && nextTurn && previous.yaw > 0f != next.yaw > 0f) return true
+        if (prevTurn && nextForward && next.forward < 0f) return true
+        if (nextTurn && prevForward && previous.forward < 0f) return true
+        return false
     }
 
     private fun currentDecision(follow: FollowDecision): FollowDecision {

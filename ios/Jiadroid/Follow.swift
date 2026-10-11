@@ -134,10 +134,10 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
     if scene.angle < -alignRad {
-        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.04, lateral: 0, yaw: 0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.10, lateral: 0, yaw: 0.40, headYaw: headYaw)
     }
     if scene.angle > alignRad {
-        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.04, lateral: 0, yaw: -0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.10, lateral: 0, yaw: -0.40, headYaw: headYaw)
     }
     if scene.distance > farM {
         return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
@@ -162,7 +162,7 @@ final class LostSearch {
         grace: TimeInterval = 0.4,
         maxSearch: TimeInterval = 8,
         slice: TimeInterval = 1.2,
-        searchYaw: Float = 0.55
+        searchYaw: Float = 0.65
     ) {
         self.grace = grace
         self.maxSearch = maxSearch
@@ -192,7 +192,7 @@ final class LostSearch {
         return FollowDecision(
             situation: "\(subject) is lost — looking",
             command: "SEARCH",
-            forward: 0,
+            forward: 0.10,
             lateral: 0,
             yaw: yaw,
             headYaw: min(0.5, max(-0.5, yaw))
