@@ -66,6 +66,9 @@ static void writeWheel(int channelA, int channelB, double radPerSec, int invert)
         ledcWrite(channelB, 0);
         return;
     }
+    if (duty < MIN_MOTOR_DUTY) {
+        duty = MIN_MOTOR_DUTY;
+    }
     if (velocity > 0) {
         ledcWrite(channelA, duty);
         ledcWrite(channelB, 0);
@@ -76,7 +79,8 @@ static void writeWheel(int channelA, int channelB, double radPerSec, int invert)
 }
 
 static void setupPwm(int channel, int pin) {
-    ledcSetup(channel, 20000, 8);
+    // ~1 kHz: many L9110S modules stall or only hiss at 20 kHz.
+    ledcSetup(channel, 1000, 8);
     ledcAttachPin(pin, channel);
     ledcWrite(channel, 0);
 }

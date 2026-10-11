@@ -127,9 +127,20 @@ class MainActivity : AppCompatActivity() {
         binding.eyes.setOnClickListener { showScreen(Screen.Debug) }
         binding.closeDebug.setOnClickListener { showScreen(Screen.Eyes) }
         binding.openSettings.setOnClickListener { showScreen(Screen.Settings) }
+        binding.debugOpenManual.setOnClickListener { showScreen(Screen.Manual) }
         binding.debugOpenSettings.setOnClickListener { showScreen(Screen.Settings) }
         binding.settingsOpenDebug.setOnClickListener { showScreen(Screen.Debug) }
         binding.closeSettings.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.manualOpenDebug.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeManual.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.manualForward.setOnClickListener { applyManual(ManualControl.forward()) }
+        binding.manualSlowForward.setOnClickListener { applyManual(ManualControl.slowForward()) }
+        binding.manualBackward.setOnClickListener { applyManual(ManualControl.backward()) }
+        binding.manualSlowBackward.setOnClickListener { applyManual(ManualControl.slowBackward()) }
+        binding.manualLeft.setOnClickListener { applyManual(ManualControl.left()) }
+        binding.manualRight.setOnClickListener { applyManual(ManualControl.right()) }
+        binding.manualSearch.setOnClickListener { applyManual(ManualControl.search()) }
+        binding.manualStop.setOnClickListener { applyManual(ManualControl.stop()) }
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
         }
@@ -306,6 +317,15 @@ class MainActivity : AppCompatActivity() {
         lastCommandKey = null
     }
 
+    /** Debug pad: hold the chosen move until Stop or another button. */
+    private fun applyManual(decision: FollowDecision) {
+        lostSearch.clear()
+        voiceDecision = decision
+        voiceActionUntil = Long.MAX_VALUE
+        lastCommandKey = null
+        send(decision, force = true)
+    }
+
     private fun currentDecision(follow: FollowDecision): FollowDecision {
         val manual = voiceDecision ?: return follow
         if (voiceActionUntil != Long.MAX_VALUE &&
@@ -387,13 +407,21 @@ class MainActivity : AppCompatActivity() {
     private fun showScreen(screen: Screen) {
         // Keep Debug mode laid out behind Eyes/Settings. CameraX needs PreviewView's
         // surface even when the user only sees another screen.
+        if (screen != Screen.Manual && voiceDecision?.situation?.startsWith("Manual:") == true) {
+            applyManual(ManualControl.stop())
+            // Hand the body back to the camera follower after leaving the pad.
+            voiceDecision = null
+            voiceActionUntil = 0L
+        }
         binding.debugMode.visibility = android.view.View.VISIBLE
         binding.normalMode.visibility = if (screen == Screen.Eyes) android.view.View.VISIBLE else android.view.View.GONE
         binding.settingsMode.visibility = if (screen == Screen.Settings) android.view.View.VISIBLE else android.view.View.GONE
+        binding.manualMode.visibility = if (screen == Screen.Manual) android.view.View.VISIBLE else android.view.View.GONE
         when (screen) {
             Screen.Eyes -> binding.normalMode.bringToFront()
             Screen.Settings -> binding.settingsMode.bringToFront()
             Screen.Debug -> binding.debugMode.bringToFront()
+            Screen.Manual -> binding.manualMode.bringToFront()
         }
         currentFocus?.clearFocus()
         hideKeyboard()
@@ -404,6 +432,7 @@ class MainActivity : AppCompatActivity() {
     private fun setLinkText(text: CharSequence?) {
         binding.link.text = text
         binding.debugLink.text = text
+        binding.manualLink.text = text
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {
@@ -415,7 +444,7 @@ class MainActivity : AppCompatActivity() {
         val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "nothing seen"
         val robot = link.get()
         val where = if (robot == null) "phone sim" else robot.safety
-        binding.detail.text = String.format(
+        val detail = String.format(
             Locale.US,
             "forward %.2f m/s   turn %.2f rad/s   head %.2f   %s   %s",
             decision.forward,
@@ -424,6 +453,10 @@ class MainActivity : AppCompatActivity() {
             range,
             where,
         )
+        binding.detail.text = detail
+        binding.manualCommand.text = decision.command
+        binding.manualCommand.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
+        binding.manualDetail.text = detail
     }
 
     private fun send(decision: FollowDecision, force: Boolean) {
@@ -943,6 +976,7 @@ class MainActivity : AppCompatActivity() {
         Eyes,
         Debug,
         Settings,
+        Manual,
     }
 
     companion object {
