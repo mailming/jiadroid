@@ -27,6 +27,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private var alive = false
     private var speaking = false
     private var speakGeneration = 0
+    private var thinkGeneration = 0
     private var reportedDrop = false
     private var tapInstalled = false
     private var restartWork: DispatchWorkItem?
@@ -66,6 +67,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         alive = false
         speaking = false
         speakGeneration += 1
+        thinkGeneration += 1
         attention.clear()
         restartWork?.cancel()
         restartWork = nil
@@ -100,12 +102,14 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
         let name = normalizeRobotName(robotName)
         let wake = parseAttention(heard: heard, name: name)
+        // TTS can be interrupted by wake name only (stop already handled above).
         if speaking {
             if wake.addressed { bargeIn() } else { return }
         }
+        thinkGeneration += 1
+        // After TTS, ignore loudspeaker echo — not open-window follow-ups (that is echo).
         if now < ignoreHearUntil {
-            let keep = !requireName || wake.addressed || attention.isEngaged(now: now)
-            if !keep { return }
+            if requireName && !wake.addressed { return }
         }
         let gate = attention.consider(heard: heard, name: name, requireName: requireName, now: now)
         guard gate.addressed else { return }
@@ -117,8 +121,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
         onTurn("You", heard)
         if gate.utterance.isEmpty {
-            speaking = true
-            closeMic()
             speak(SpokenReply(say: "Yes?", emotion: .curious), rememberUser: nil, userAlreadyStaged: false)
             return
         }
@@ -126,8 +128,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         if let action = parseVoiceAction(gate.utterance) {
             onAction(action)
             onTurn("Action", action.description)
-            speaking = true
-            closeMic()
             attention.keepAlive(now: Date())
             speak(
                 SpokenReply(say: action.spokenAck, emotion: .excited),
@@ -136,8 +136,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             )
             return
         }
-        speaking = true
-        closeMic()
         attention.keepAlive(now: Date())
         let seen = seeing()
         let request = gate.utterance
@@ -154,6 +152,8 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             speak(spoken, rememberUser: request, userAlreadyStaged: true)
             return
         }
+        // Stay listening while the model runs — do not hold the speaking lock here.
+        let thinkId = thinkGeneration
         onEmotion(.thinking)
         onLine("Thinking…")
         reopenForBargeInSoon()
@@ -173,6 +173,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                 spoken = reply(heard: request, seeing: seen, name: name, memory: self.memory, kb: self.kb)
             }
             DispatchQueue.main.async {
+                guard thinkId == self.thinkGeneration else { return }
                 self.attention.keepAlive()
                 self.speak(spoken, rememberUser: request, userAlreadyStaged: true)
             }
@@ -290,7 +291,12 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                 }
                 if result.isFinal {
                     let wasSpeaking = speaking
-                    answer(text)
+                    // While TTS plays, only wake/stop may interrupt — otherwise we hear ourselves.
+                    let isStop = parseVoiceAction(text)?.motion == .stop
+                    let isWake = parseAttention(heard: text, name: robotName).addressed
+                    if !(speaking && !isStop && !isWake) {
+                        answer(text)
+                    }
                     // Final results end the Apple task; reopen for idle listen or barge-in.
                     if alive && (!speaking || wasSpeaking) {
                         scheduleRetry()
@@ -328,6 +334,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                 memory.rememberAssistant(spoken.say)
             }
         }
+        speaking = true
         closeMic()
         lastSpoken = spoken.say
         onEmotion(spoken.emotion)
@@ -365,8 +372,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         onTurn("You", heard)
         onAction(action)
         onTurn("Action", action.description)
-        speaking = true
-        closeMic()
         speak(
             SpokenReply(say: action.spokenAck, emotion: .neutral),
             rememberUser: heard,
@@ -376,9 +381,11 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
 
     private func bargeIn() {
         speakGeneration += 1
+        thinkGeneration += 1
         synthesizer.stopSpeaking(at: .immediate)
         speaking = false
-        ignoreHearUntil = .distantPast
+        // Brief mute so the interrupted TTS trail is not heard as the user.
+        ignoreHearUntil = Date().addingTimeInterval(Self.echoCooldownSeconds)
         onLine("Listening")
     }
 
@@ -466,7 +473,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         let spokenWords = Set(spoken.split(separator: " ").map(String.init).filter { $0.count > 2 })
         if heardWords.isEmpty { return false }
         let hit = heardWords.filter { spokenWords.contains($0) }.count
-        return Double(hit) / Double(heardWords.count) >= 0.6
+        return Double(hit) / Double(heardWords.count) >= 0.45
     }
 
     private func normalizeForEcho(_ text: String) -> String {
@@ -477,6 +484,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private static let speakLimitSeconds: TimeInterval = 10
-    private static let echoCooldownSeconds: TimeInterval = 0.45
+    private static let echoCooldownSeconds: TimeInterval = 1.0
     private static let noise: Set<String> = ["huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an"]
 }

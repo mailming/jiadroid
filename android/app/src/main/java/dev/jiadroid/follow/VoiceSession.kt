@@ -55,10 +55,12 @@ class VoiceSession(
     private var listening = false
     private var readyToSpeak = false
     private var speakGeneration = 0
+    private var thinkGeneration = 0
     private var restartGeneration = 0
     private var lastSpoken = ""
     private var ignoreHearUntilMs = 0L
     private var earlyStopAtMs = 0L
+    private var noMatchStreak = 0
     private val attention = AttentionSession()
 
     private val listener = object : RecognitionListener {
@@ -88,6 +90,7 @@ class VoiceSession(
                 }
                 SpeechRecognizer.ERROR_CLIENT -> {
                     // Often happens after cancel while speaking; just wait to restart.
+                    noMatchStreak = 0
                     scheduleListen(delayMs = 80L)
                 }
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> scheduleListen(delayMs = 500L)
@@ -105,11 +108,20 @@ class VoiceSession(
                     scheduleListen(delayMs = 1_500L)
                 }
                 SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                    // Normal idle end — reopen quickly so the next wake is not missed.
-                    if (attention.isEngaged(SystemClock.elapsedRealtime())) {
-                        onLine("Listening")
+                    // Motor noise / silence often ends as no-match. After a streak,
+                    // rebuild the recognizer so the session does not go deaf.
+                    noMatchStreak += 1
+                    if (noMatchStreak >= 6) {
+                        noMatchStreak = 0
+                        Log.i(TAG, "speech no-match streak — rebuilding recognizer")
+                        rebuildSpeech()
+                        scheduleListen(delayMs = 400L)
+                    } else {
+                        if (attention.isEngaged(SystemClock.elapsedRealtime())) {
+                            onLine("Listening")
+                        }
+                        scheduleListen(delayMs = 120L)
                     }
-                    scheduleListen(delayMs = 120L)
                 }
                 else -> scheduleListen(delayMs = 200L)
             }
@@ -117,13 +129,18 @@ class VoiceSession(
 
         override fun onResults(results: Bundle?) {
             listening = false
+            noMatchStreak = 0
             val text = bestResult(results)
             val wasSpeaking = speaking
-            // Allow wake-word barge-in even while TTS is playing.
             if (!text.isNullOrBlank() && alive) {
-                answer(text)
+                // While TTS plays, only wake/stop may interrupt — otherwise we hear ourselves.
+                if (speaking && !isWakeOrStop(text)) {
+                    Log.i(TAG, "ignore loudspeaker while talking: $text")
+                } else {
+                    answer(text)
+                }
             }
-            // Full listen after a turn ends; keep a wake-only mic open while talking.
+            // Full listen after a turn ends; wake/stop mic while talking.
             if (!speaking) {
                 scheduleListen()
             } else if (wasSpeaking) {
@@ -137,7 +154,7 @@ class VoiceSession(
             if (text.isBlank()) return
             // Halt as soon as "stop" appears — don't wait for end-of-speech silence.
             if (tryEarlyStop(text)) return
-            // Stop talking if the user calls the wake name over the reply.
+            // Only the wake name may interrupt TTS (not open-window chatter / echo).
             if (speaking && parseAttention(text, robotName).addressed) {
                 bargeIn()
             }
@@ -178,6 +195,7 @@ class VoiceSession(
         alive = false
         speaking = false
         speakGeneration += 1
+        thinkGeneration += 1
         restartGeneration += 1
         attention.clear()
         cancelListen()
@@ -289,17 +307,24 @@ class VoiceSession(
         scheduleListen(delayMs = ECHO_COOLDOWN_MS)
     }
 
-    /** Stop TTS so a wake word said over the reply can be handled. */
+    /** Stop TTS so a wake name said over the reply can be handled. */
     private fun bargeIn() {
         speakGeneration += 1
+        thinkGeneration += 1
         try {
             speaker?.stop()
         } catch (error: Exception) {
             Log.i(TAG, "barge-in stop: ${error.message}")
         }
         speaking = false
-        ignoreHearUntilMs = 0L
+        // Brief mute so the interrupted TTS trail is not heard as the user.
+        ignoreHearUntilMs = SystemClock.elapsedRealtime() + ECHO_COOLDOWN_MS
         onLine("Listening")
+    }
+
+    private fun isWakeOrStop(heard: String): Boolean {
+        if (parseVoiceAction(heard)?.motion == VoiceMotion.STOP) return true
+        return parseAttention(heard, robotName).addressed
     }
 
     /**
@@ -324,8 +349,6 @@ class VoiceSession(
         onTurn("You", heard)
         onAction(action)
         onTurn("Action", action.description)
-        speaking = true
-        cancelListen()
         speak(
             SpokenReply(action.spokenAck, Emotion.NEUTRAL),
             rememberUser = heard,
@@ -350,15 +373,19 @@ class VoiceSession(
         }
         val name = normalizeRobotName(robotName)
         val wake = parseAttention(heard, name)
-        // Saying the wake name over TTS interrupts the reply.
+        // TTS can be interrupted by wake name only (stop already handled above).
         if (speaking) {
-            if (wake.addressed) bargeIn() else return
+            if (wake.addressed) bargeIn() else {
+                Log.i(TAG, "drop while speaking: $heard")
+                return
+            }
         }
-        // After TTS, ignore loudspeaker echo — but never drop a wake / open-window turn.
+        // A new user turn cancels any in-flight model reply still "Thinking…".
+        thinkGeneration += 1
+        // After TTS, ignore loudspeaker echo. Do not accept open-window follow-ups
+        // here — that is how the robot's own reply gets treated as the user.
         if (now < ignoreHearUntilMs) {
-            val keep =
-                !requireName || wake.addressed || attention.isEngaged(now)
-            if (!keep) return
+            if (requireName && !wake.addressed) return
         }
         val gate = attention.consider(heard, name, requireName, now)
         if (!gate.addressed) return
@@ -370,8 +397,6 @@ class VoiceSession(
         }
         onTurn("You", heard)
         if (gate.utterance.isEmpty()) {
-            speaking = true
-            cancelListen()
             speak(SpokenReply("Yes?", Emotion.CURIOUS), rememberUser = null, userAlreadyStaged = false)
             return
         }
@@ -380,8 +405,6 @@ class VoiceSession(
         parseVoiceAction(gate.utterance)?.let { action ->
             onAction(action)
             onTurn("Action", action.description)
-            speaking = true
-            cancelListen()
             attention.keepAlive(SystemClock.elapsedRealtime())
             speak(
                 SpokenReply(action.spokenAck, Emotion.EXCITED),
@@ -390,8 +413,6 @@ class VoiceSession(
             )
             return
         }
-        speaking = true
-        cancelListen()
         attention.keepAlive(SystemClock.elapsedRealtime())
         val seen = seeing()
         val request = gate.utterance
@@ -412,10 +433,12 @@ class VoiceSession(
             speak(spoken, rememberUser = request, userAlreadyStaged = true)
             return
         }
+        // Stay listening while the model runs — do not hold the speaking lock here,
+        // or follow-ups get dropped until TTS finishes.
+        val thinkId = thinkGeneration
         onEmotion(Emotion.THINKING)
         onLine("Thinking…")
-        // Keep a wake mic open so a long model call can still be interrupted.
-        scheduleListen(delayMs = 200L)
+        scheduleListen(delayMs = 120L)
         thinker.execute {
             val spoken = try {
                 brain.answer(request, seen, name, memory, kb)
@@ -424,6 +447,10 @@ class VoiceSession(
                 reply(request, seen, name, memory, kb)
             }
             activity.runOnUiThread {
+                if (thinkId != thinkGeneration) {
+                    Log.i(TAG, "discard stale model reply")
+                    return@runOnUiThread
+                }
                 attention.keepAlive(SystemClock.elapsedRealtime())
                 speak(spoken, rememberUser = request, userAlreadyStaged = true)
             }
@@ -448,6 +475,7 @@ class VoiceSession(
                 memory.rememberAssistant(spoken.say)
             }
         }
+        speaking = true
         cancelListen()
         lastSpoken = spoken.say
         onEmotion(spoken.emotion)
@@ -462,7 +490,7 @@ class VoiceSession(
             resume()
             return
         }
-        // Wake-only mic while talking so "hey Vicky" can interrupt.
+        // Barge-in mic while talking so wake / follow-ups can interrupt.
         scheduleListen(delayMs = 350L)
         // Safety valve: stop TTS then cool down.
         main.postDelayed({
@@ -488,7 +516,8 @@ class VoiceSession(
         val spokenWords = spoken.split(' ').filter { it.length > 2 }.toSet()
         if (heardWords.isEmpty()) return false
         val hit = heardWords.count { it in spokenWords }
-        return hit.toDouble() / heardWords.size >= 0.6
+        // Lower threshold — short replies often share most content words with the echo.
+        return hit.toDouble() / heardWords.size >= 0.45
     }
 
     private fun normalizeForEcho(text: String): String =
@@ -505,8 +534,8 @@ class VoiceSession(
     private companion object {
         const val TAG = "Jiadroid"
         const val SPEAK_LIMIT_MS = 10_000L
-        /** Short mute after TTS so the loudspeaker is not transcribed as the user. */
-        const val ECHO_COOLDOWN_MS = 450L
+        /** Mute after TTS so the loudspeaker is not transcribed as the user. */
+        const val ECHO_COOLDOWN_MS = 1_000L
         const val KB_PREFS = "jiadroid_audience_kb"
         const val KB_KEY = "notes_json"
         val NOISE = setOf("huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an")
