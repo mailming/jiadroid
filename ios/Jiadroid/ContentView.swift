@@ -497,6 +497,10 @@ private struct BrainSection: View {
 private struct CameraPreview: UIViewRepresentable {
     let session: CameraSession
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session.session
@@ -508,10 +512,20 @@ private struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.previewLayer.session = session.session
+        if uiView.previewLayer.session !== session.session {
+            uiView.previewLayer.session = session.session
+        }
         let orientation = uiView.window?.windowScene?.interfaceOrientation ?? .landscapeRight
-        session.align(to: orientation)
-        session.alignPreview(uiView.previewLayer.connection)
+        // SwiftUI redraws this view at the follow tick rate; only realign on rotation.
+        if context.coordinator.lastOrientation != orientation {
+            context.coordinator.lastOrientation = orientation
+            session.align(to: orientation)
+            session.alignPreview(uiView.previewLayer.connection)
+        }
+    }
+
+    final class Coordinator {
+        var lastOrientation: UIInterfaceOrientation?
     }
 }
 

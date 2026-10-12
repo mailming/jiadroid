@@ -37,6 +37,7 @@ final class FollowSession: ObservableObject, CameraSink {
     private var reconnectHappyUntil = Date.distantPast
     private var lastBumpPollAt = Date.distantPast
     private var bumpPolling = false
+    private var lastTrailAt = Date.distantPast
 
     func start() {
         camera.sink = self
@@ -276,10 +277,20 @@ final class FollowSession: ObservableObject, CameraSink {
             tracked = lostSearch.enrich(scene: shown, follow: follow, now: now, subject: subject)
         }
         let decision = currentDecision(tracked, now: now)
-        sim.gait = decision.command == "STOP" ? 0 : sim.gait + dt * 7
+        let nextGait: Float = decision.command == "STOP" ? 0 : sim.gait + dt * 7
+        if abs(sim.gait - nextGait) > 0.001 { sim.gait = nextGait }
         stepPose(&sim.pose, forward: decision.forward, lateral: decision.lateral, yaw: decision.yaw, dt: dt)
-        sim.trail.append((sim.pose.x, sim.pose.y))
-        if sim.trail.count > 80 { sim.trail.removeFirst(sim.trail.count - 80) }
+        // Trail is decorative; publish at ~10 Hz to cut SwiftUI Canvas churn.
+        if now.timeIntervalSince(lastTrailAt) >= 0.1 {
+            lastTrailAt = now
+            var trail = sim.trail
+            let point = (sim.pose.x, sim.pose.y)
+            if trail.last.map({ abs($0.0 - point.0) + abs($0.1 - point.1) > 0.01 }) ?? true {
+                trail.append(point)
+                if trail.count > 80 { trail.removeFirst(trail.count - 80) }
+                sim.trail = trail
+            }
+        }
         let targetX: Float
         switch decision.command {
         case "TURN LEFT": targetX = 1
@@ -289,8 +300,8 @@ final class FollowSession: ObservableObject, CameraSink {
         let vertical: Float = shown.visible ? sim.gazeY : 0
         lookX += (targetX - lookX) * 0.35
         lookY += (vertical - lookY) * 0.25
-        sim.lookX = lookX
-        sim.lookY = lookY
+        if abs(sim.lookX - lookX) > 0.01 { sim.lookX = lookX }
+        if abs(sim.lookY - lookY) > 0.01 { sim.lookY = lookY }
         refreshFace(decision, now: now)
         pollBump(now: now)
         show(decision, shown)
@@ -362,12 +373,19 @@ final class FollowSession: ObservableObject, CameraSink {
     }
 
     private func show(_ decision: FollowDecision, _ scene: Scene) {
-        status.situation = decision.situation
-        status.command = decision.command
-        status.moving = decision.command != "STOP"
+        if status.situation != decision.situation {
+            status.situation = decision.situation
+        }
+        if status.command != decision.command {
+            status.command = decision.command
+        }
+        let moving = decision.command != "STOP"
+        if status.moving != moving {
+            status.moving = moving
+        }
         let range = scene.visible ? String(format: "%.2f m", scene.distance) : "nothing seen"
         let place = currentRobot()?.safety ?? "phone sim"
-        status.detail = String(
+        let detail = String(
             format: "forward %.2f m/s   turn %.2f rad/s   head %.2f   %@   %@",
             decision.forward,
             decision.yaw,
@@ -375,6 +393,9 @@ final class FollowSession: ObservableObject, CameraSink {
             range,
             place
         )
+        if status.detail != detail {
+            status.detail = detail
+        }
     }
 
     private func send(_ decision: FollowDecision, force: Bool) {

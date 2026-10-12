@@ -107,20 +107,26 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         if now.timeIntervalSince(lastScan) < 0.08 { return }
         lastScan = now
         guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let barcode = VNDetectBarcodesRequest()
-        barcode.symbologies = [.qr]
-        let pose = VNDetectHumanBodyPoseRequest()
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixel, orientation: .up, options: [:])
-        do {
-            try handler.perform([barcode, pose])
-        } catch {
-            return
-        }
         let imageWidth = CVPixelBufferGetWidth(pixel)
         let imageHeight = CVPixelBufferGetHeight(pixel)
         guard imageWidth > 0, imageHeight > 0 else { return }
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixel, orientation: .up, options: [:])
+        // Match Android: QR first, then body pose only when the marker is missing.
+        let barcode = VNDetectBarcodesRequest()
+        barcode.symbologies = [.qr]
+        do {
+            try handler.perform([barcode])
+        } catch {
+            return
+        }
         if let hit = barcode.results?.first(where: { $0.payloadStringValue == markerPayload }) {
             publishMarker(hit, imageWidth, imageHeight)
+            return
+        }
+        let pose = VNDetectHumanBodyPoseRequest()
+        do {
+            try handler.perform([pose])
+        } catch {
             return
         }
         publishPerson(pose.results?.first, imageWidth, imageHeight)

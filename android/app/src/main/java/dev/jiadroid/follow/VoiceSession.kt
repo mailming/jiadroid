@@ -45,7 +45,7 @@ class VoiceSession(
             activity.getSharedPreferences(KB_PREFS, AppCompatActivity.MODE_PRIVATE)
                 .edit()
                 .putString(KB_KEY, json)
-                .commit()
+                .apply()
         },
     )
     private var speech: SpeechRecognizer? = null

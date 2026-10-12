@@ -84,6 +84,12 @@ class MainActivity : AppCompatActivity() {
     private var reconnectHappyUntil = 0L
     private var lastBumpPollAt = 0L
     private var bumpPolling = false
+    private var lastScanAt = 0L
+    @Volatile private var scanning = false
+    private var lastShownSituation = ""
+    private var lastShownCommand = ""
+    private var lastShownDetail = ""
+    private var lastShownMoving: Boolean? = null
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -498,9 +504,21 @@ class MainActivity : AppCompatActivity() {
     private fun show(decision: FollowDecision, scene: Scene) {
         val moving = decision.command != "STOP"
         situationText = decision.situation
-        binding.situation.text = decision.situation
-        binding.command.text = decision.command
-        binding.command.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
+        if (decision.situation != lastShownSituation) {
+            lastShownSituation = decision.situation
+            binding.situation.text = decision.situation
+        }
+        if (decision.command != lastShownCommand) {
+            lastShownCommand = decision.command
+            binding.command.text = decision.command
+            binding.manualCommand.text = decision.command
+        }
+        if (lastShownMoving != moving) {
+            lastShownMoving = moving
+            val color = ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop)
+            binding.command.setTextColor(color)
+            binding.manualCommand.setTextColor(color)
+        }
         val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "nothing seen"
         val robot = link.get()
         val where = if (robot == null) "phone sim" else robot.safety
@@ -513,10 +531,11 @@ class MainActivity : AppCompatActivity() {
             range,
             where,
         )
-        binding.detail.text = detail
-        binding.manualCommand.text = decision.command
-        binding.manualCommand.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
-        binding.manualDetail.text = detail
+        if (detail != lastShownDetail) {
+            lastShownDetail = detail
+            binding.detail.text = detail
+            binding.manualDetail.text = detail
+        }
     }
 
     private fun send(decision: FollowDecision, force: Boolean) {
@@ -855,6 +874,13 @@ class MainActivity : AppCompatActivity() {
             image.close()
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        if (scanning || now - lastScanAt < SCAN_MIN_MS) {
+            image.close()
+            return
+        }
+        lastScanAt = now
+        scanning = true
         val rotation = image.imageInfo.rotationDegrees
         val uprightWidth = if (rotation == 90 || rotation == 270) image.height else image.width
         val uprightHeight = if (rotation == 90 || rotation == 270) image.width else image.height
@@ -884,8 +910,12 @@ class MainActivity : AppCompatActivity() {
                         null
                     }
                 }
-                .addOnCompleteListener { image.close() }
+                .addOnCompleteListener {
+                    scanning = false
+                    image.close()
+                }
         } catch (error: Exception) {
+            scanning = false
             image.close()
             Log.i(TAG, "marker scan failed", error)
         }
@@ -904,12 +934,14 @@ class MainActivity : AppCompatActivity() {
         )
         hfovRad = hfovFor(rotation, imageWidth, imageHeight)
         val measured = measure(centerX, widthPx, imageWidth, hfovRad, markerWidthM())
-        Log.i(
-            TAG,
-            "marker ${"%.0f".format(Locale.US, widthPx)}px in ${imageWidth}x$imageHeight " +
-                "rot=$rotation fov=${"%.0f".format(Locale.US, Math.toDegrees(hfovRad))} " +
-                "mm=${"%.0f".format(Locale.US, markerWidthM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
-        )
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(
+                TAG,
+                "marker ${"%.0f".format(Locale.US, widthPx)}px in ${imageWidth}x$imageHeight " +
+                    "rot=$rotation fov=${"%.0f".format(Locale.US, Math.toDegrees(hfovRad))} " +
+                    "mm=${"%.0f".format(Locale.US, markerWidthM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+            )
+        }
         accept(measured, SUBJECT_MARKER, placed, imageWidth, imageHeight)
     }
 
@@ -930,12 +962,14 @@ class MainActivity : AppCompatActivity() {
         }
         hfovRad = hfovFor(rotation, imageWidth, imageHeight)
         val measured = measurePerson(leftShoulder to rightShoulder, hips, imageWidth, hfovRad, personHeightM())
-        Log.i(
-            TAG,
-            "person shoulders ${"%.0f".format(Locale.US, leftShoulder.distanceTo(rightShoulder))}px " +
-                "hips=${hips != null} in ${imageWidth}x$imageHeight " +
-                "mm=${"%.0f".format(Locale.US, personHeightM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
-        )
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(
+                TAG,
+                "person shoulders ${"%.0f".format(Locale.US, leftShoulder.distanceTo(rightShoulder))}px " +
+                    "hips=${hips != null} in ${imageWidth}x$imageHeight " +
+                    "mm=${"%.0f".format(Locale.US, personHeightM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+            )
+        }
         val shoulderWidth = leftShoulder.distanceTo(rightShoulder)
         val lowLeft = leftHip ?: Point(leftShoulder.x, leftShoulder.y + shoulderWidth)
         val lowRight = rightHip ?: Point(rightShoulder.x, rightShoulder.y + shoulderWidth)
@@ -1041,6 +1075,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "Jiadroid"
+        /** Match iOS CameraSession: at most ~12.5 vision passes per second. */
+        private const val SCAN_MIN_MS = 80L
         private const val HOLD_MS = 400L
         private const val BODY_LIKELIHOOD = 0.7f
         private const val SUBJECT_MARKER = "Marker"
