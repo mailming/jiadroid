@@ -31,7 +31,7 @@ class FollowTest {
         val decision = decide(Scene(true, 0f, 2f))
         assertEquals("Marker is too far", decision.situation)
         assertEquals("FORWARD", decision.command)
-        assertEquals(0.12f, decision.forward, 0.0001f)
+        assertEquals(0.06f, decision.forward, 0.0001f)
         assertEquals(0f, decision.yaw, 0.0001f)
     }
 
@@ -39,7 +39,7 @@ class FollowTest {
     fun centeredAndNearSlowsDown() {
         val decision = decide(Scene(true, 0f, 0.5f))
         assertEquals("SLOW DOWN", decision.command)
-        assertEquals(0.05f, decision.forward, 0.0001f)
+        assertEquals(0.025f, decision.forward, 0.0001f)
     }
 
     @Test

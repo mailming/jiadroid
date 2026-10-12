@@ -42,19 +42,20 @@ data class VoiceAction(val motion: VoiceMotion) {
         VoiceMotion.STOP -> stopped("Voice command: stopped")
         VoiceMotion.FOLLOW -> stopped("Voice command: follow")
         VoiceMotion.FORWARD ->
-            FollowDecision("Voice command: forward", "FORWARD", 0.08f, 0f, 0f, 0f)
+            FollowDecision("Voice command: forward", "FORWARD", 0.04f, 0f, 0f, 0f)
         VoiceMotion.BACKWARD ->
-            FollowDecision("Voice command: backward", "BACKWARD", -0.06f, 0f, 0f, 0f)
+            FollowDecision("Voice command: backward", "BACKWARD", -0.03f, 0f, 0f, 0f)
         VoiceMotion.TURN_LEFT ->
-            FollowDecision("Voice command: turn left", "TURN LEFT", 0.07f, 0f, 0.85f, -0.4f)
+            FollowDecision("Voice command: turn left", "TURN LEFT", 0.05f, 0f, 0.20f, -0.20f)
         VoiceMotion.TURN_RIGHT ->
-            FollowDecision("Voice command: turn right", "TURN RIGHT", 0.07f, 0f, -0.85f, 0.4f)
+            FollowDecision("Voice command: turn right", "TURN RIGHT", 0.05f, 0f, -0.20f, 0.20f)
     }
 
     val durationMs: Long
         get() = when (motion) {
             VoiceMotion.FORWARD, VoiceMotion.BACKWARD -> 1_400L
-            VoiceMotion.TURN_LEFT, VoiceMotion.TURN_RIGHT -> 1_400L
+            // Short nudge — keep the person in frame for Follow Me.
+            VoiceMotion.TURN_LEFT, VoiceMotion.TURN_RIGHT -> 220L
             VoiceMotion.STOP, VoiceMotion.FOLLOW -> 0L
         }
 }

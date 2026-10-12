@@ -58,6 +58,7 @@ class VoiceSession(
     private var restartGeneration = 0
     private var lastSpoken = ""
     private var ignoreHearUntilMs = 0L
+    private var earlyStopAtMs = 0L
     private val attention = AttentionSession()
 
     private val listener = object : RecognitionListener {
@@ -134,6 +135,8 @@ class VoiceSession(
             if (!alive) return
             val text = bestResult(partialResults) ?: return
             if (text.isBlank()) return
+            // Halt as soon as "stop" appears — don't wait for end-of-speech silence.
+            if (tryEarlyStop(text)) return
             // Stop talking if the user calls the wake name over the reply.
             if (speaking && parseAttention(text, robotName).addressed) {
                 bargeIn()
@@ -232,10 +235,10 @@ class VoiceSession(
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, activity.packageName)
-            // Give a short pause before the recognizer cuts the user off mid-thought.
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1_500L)
+            // Keep silence short so "stop" finalizes quickly while following.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 400L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 400L)
         }
         try {
             listening = true
@@ -300,14 +303,51 @@ class VoiceSession(
     }
 
     /**
+     * Fire STOP from a partial transcript. Google often waits for silence before
+     * finals; while Follow Me is driving that delay feels dangerous.
+     */
+    private fun tryEarlyStop(heard: String): Boolean {
+        if (parseVoiceAction(heard)?.motion != VoiceMotion.STOP) return false
+        val now = SystemClock.elapsedRealtime()
+        if (now - earlyStopAtMs < 1_200L) return true
+        earlyStopAtMs = now
+        answer(heard)
+        return true
+    }
+
+    /** Halt motors immediately — no wake name, no chat model. */
+    private fun applyStopNow(heard: String) {
+        val action = VoiceAction(VoiceMotion.STOP)
+        if (speaking) bargeIn()
+        ignoreHearUntilMs = 0L
+        attention.keepAlive(SystemClock.elapsedRealtime())
+        onTurn("You", heard)
+        onAction(action)
+        onTurn("Action", action.description)
+        speaking = true
+        cancelListen()
+        speak(
+            SpokenReply(action.spokenAck, Emotion.NEUTRAL),
+            rememberUser = heard,
+            userAlreadyStaged = false,
+        )
+    }
+
+    /**
      * Answers [heard]. Microphone lines need the robot's name once to open a short
      * conversation window; later turns keep going until ~30s of silence. Typed Debug
      * lines pass [requireName]=false so the keyboard can talk without saying it.
+     * Exception: "stop" / "halt" always works, even mid-Follow with no wake name.
      */
     fun answer(heard: String, requireName: Boolean = true) {
         if (isNoise(heard)) return
         if (isEchoOfSelf(heard)) return
         val now = SystemClock.elapsedRealtime()
+        // Safety stop first — works outside the wake window and during TTS.
+        if (parseVoiceAction(heard)?.motion == VoiceMotion.STOP) {
+            applyStopNow(heard)
+            return
+        }
         val name = normalizeRobotName(robotName)
         val wake = parseAttention(heard, name)
         // Saying the wake name over TTS interrupts the reply.

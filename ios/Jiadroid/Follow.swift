@@ -134,18 +134,18 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
     if scene.angle < -alignRad {
-        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.85, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.20, headYaw: headYaw)
     }
     if scene.angle > alignRad {
-        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.85, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.20, headYaw: headYaw)
     }
     if scene.distance > farM {
-        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.06, lateral: 0, yaw: 0, headYaw: headYaw)
     }
     if scene.distance < slowM {
-        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.05, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.025, lateral: 0, yaw: 0, headYaw: headYaw)
     }
-    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
+    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.04, lateral: 0, yaw: 0, headYaw: headYaw)
 }
 
 /// When the target disappears, wait briefly then scan left, right, and reverse
@@ -162,8 +162,8 @@ final class LostSearch {
     init(
         grace: TimeInterval = 0.4,
         maxSearch: TimeInterval = 8,
-        slice: TimeInterval = 0.9,
-        searchYaw: Float = 0.70,
+        slice: TimeInterval = 0.5,
+        searchYaw: Float = 0.32,
         searchBackup: Float = -0.08
     ) {
         self.grace = grace
@@ -272,7 +272,7 @@ enum FollowLogicTests {
         let far = decide(Scene(visible: true, angle: 0, distance: 2))
         try expect(far.situation == "Marker is too far", "far situation")
         try expect(far.command == "FORWARD", "far command")
-        try expect(abs(far.forward - 0.12) < 0.0001, "far speed")
+        try expect(abs(far.forward - 0.06) < 0.0001, "far speed")
         try expect(abs(far.yaw) < 0.0001, "far yaw")
 
         let near = decide(Scene(visible: true, angle: 0, distance: 0.5))

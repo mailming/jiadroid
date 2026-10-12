@@ -35,7 +35,8 @@ class VoiceActionTest {
 
     @Test
     fun movementIsBriefAndStopIsLatched() {
-        assertEquals(1400L, VoiceAction(VoiceMotion.TURN_RIGHT).durationMs)
+        assertEquals(220L, VoiceAction(VoiceMotion.TURN_RIGHT).durationMs)
+        assertEquals(-0.20f, VoiceAction(VoiceMotion.TURN_RIGHT).decision().yaw, 0.0001f)
         assertEquals(1400L, VoiceAction(VoiceMotion.FORWARD).durationMs)
         assertEquals(0L, VoiceAction(VoiceMotion.STOP).durationMs)
         assertEquals("Turning left.", VoiceAction(VoiceMotion.TURN_LEFT).spokenAck)

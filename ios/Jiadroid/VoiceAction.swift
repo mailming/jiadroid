@@ -47,20 +47,21 @@ struct VoiceAction {
         case .follow:
             return FollowDecision(situation: "Voice command: follow", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0)
         case .forward:
-            return FollowDecision(situation: "Voice command: forward", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: 0)
+            return FollowDecision(situation: "Voice command: forward", command: "FORWARD", forward: 0.04, lateral: 0, yaw: 0, headYaw: 0)
         case .backward:
-            return FollowDecision(situation: "Voice command: backward", command: "BACKWARD", forward: -0.06, lateral: 0, yaw: 0, headYaw: 0)
+            return FollowDecision(situation: "Voice command: backward", command: "BACKWARD", forward: -0.03, lateral: 0, yaw: 0, headYaw: 0)
         case .turnLeft:
-            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.85, headYaw: -0.4)
+            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0.05, lateral: 0, yaw: 0.20, headYaw: -0.20)
         case .turnRight:
-            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.85, headYaw: 0.4)
+            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0.05, lateral: 0, yaw: -0.20, headYaw: 0.20)
         }
     }
 
     var durationMs: TimeInterval {
         switch motion {
         case .forward, .backward: return 1.4
-        case .turnLeft, .turnRight: return 1.4
+        // Short nudge — keep the person in frame for Follow Me.
+        case .turnLeft, .turnRight: return 0.22
         case .stop, .follow: return 0
         }
     }

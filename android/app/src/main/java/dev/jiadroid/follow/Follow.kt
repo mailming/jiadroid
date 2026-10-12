@@ -157,18 +157,18 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
     if (scene.distance < CLOSE_M) return stopped("$subject is too close")
     val headYaw = scene.angle.coerceIn(-0.5f, 0.5f)
     if (scene.angle < -ALIGN_RAD) {
-        return FollowDecision("$subject is left", "TURN LEFT", 0.07f, 0f, 0.85f, headYaw)
+        return FollowDecision("$subject is left", "TURN LEFT", 0.07f, 0f, 0.20f, headYaw)
     }
     if (scene.angle > ALIGN_RAD) {
-        return FollowDecision("$subject is right", "TURN RIGHT", 0.07f, 0f, -0.85f, headYaw)
+        return FollowDecision("$subject is right", "TURN RIGHT", 0.07f, 0f, -0.20f, headYaw)
     }
     if (scene.distance > FAR_M) {
-        return FollowDecision("$subject is too far", "FORWARD", 0.12f, 0f, 0f, headYaw)
+        return FollowDecision("$subject is too far", "FORWARD", 0.06f, 0f, 0f, headYaw)
     }
     if (scene.distance < SLOW_M) {
-        return FollowDecision("$subject is centered", "SLOW DOWN", 0.05f, 0f, 0f, headYaw)
+        return FollowDecision("$subject is centered", "SLOW DOWN", 0.025f, 0f, 0f, headYaw)
     }
-    return FollowDecision("$subject is centered", "FORWARD", 0.08f, 0f, 0f, headYaw)
+    return FollowDecision("$subject is centered", "FORWARD", 0.04f, 0f, 0f, headYaw)
 }
 
 /**
@@ -179,8 +179,8 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
 class LostSearch(
     private val graceMs: Long = 400L,
     private val maxSearchMs: Long = 8_000L,
-    private val sliceMs: Long = 900L,
-    private val searchYaw: Float = 0.70f,
+    private val sliceMs: Long = 500L,
+    private val searchYaw: Float = 0.32f,
     private val searchBackup: Float = -0.08f,
 ) {
     private var lostSinceMs: Long? = null

@@ -32,6 +32,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private var restartWork: DispatchWorkItem?
     private var lastSpoken = ""
     private var ignoreHearUntil = Date.distantPast
+    private var earlyStopAt = Date.distantPast
     private let attention = AttentionSession()
     private let memory = TalkMemory()
     private let kb = AudienceKb()
@@ -87,10 +88,16 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
 
     /// Answers [heard]. Mic lines need the robot's name once to open a short conversation window;
     /// later turns keep going until ~30s of silence. Typed Debug lines pass `requireName: false`.
+    /// Exception: "stop" / "halt" always works, even mid-Follow with no wake name.
     func answer(_ heard: String, requireName: Bool = true) {
         if isNoise(heard) { return }
         if isEchoOfSelf(heard) { return }
         let now = Date()
+        // Safety stop first — works outside the wake window and during TTS.
+        if parseVoiceAction(heard)?.motion == .stop {
+            applyStopNow(heard)
+            return
+        }
         let name = normalizeRobotName(robotName)
         let wake = parseAttention(heard: heard, name: name)
         if speaking {
@@ -276,6 +283,8 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         if let result {
             let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
+                // Halt as soon as "stop" appears — don't wait for the final result.
+                if tryEarlyStop(text) { return }
                 if speaking && parseAttention(heard: text, name: robotName).addressed {
                     bargeIn()
                 }
@@ -337,6 +346,32 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             self.synthesizer.stopSpeaking(at: .immediate)
             self.resume()
         }
+    }
+
+    private func tryEarlyStop(_ heard: String) -> Bool {
+        guard parseVoiceAction(heard)?.motion == .stop else { return false }
+        let now = Date()
+        if now.timeIntervalSince(earlyStopAt) < 1.2 { return true }
+        earlyStopAt = now
+        answer(heard)
+        return true
+    }
+
+    private func applyStopNow(_ heard: String) {
+        let action = VoiceAction(motion: .stop)
+        if speaking { bargeIn() }
+        ignoreHearUntil = .distantPast
+        attention.keepAlive()
+        onTurn("You", heard)
+        onAction(action)
+        onTurn("Action", action.description)
+        speaking = true
+        closeMic()
+        speak(
+            SpokenReply(say: action.spokenAck, emotion: .neutral),
+            rememberUser: heard,
+            userAlreadyStaged: false
+        )
     }
 
     private func bargeIn() {
