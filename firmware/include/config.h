@@ -1,7 +1,8 @@
 #pragma once
 
-// Replace these before flashing. The chip joins this network and listens
-// on ROBOT_PORT, the same port as the laptop simulator.
+// First-boot Wi‑Fi fallback only. After the phone sends wifi.set over USB,
+// credentials live in NVS and override these. Leave as placeholders to skip
+// Wi‑Fi until the phone configures it.
 #define WIFI_SSID "your-network"
 #define WIFI_PASSWORD "your-password"
 
@@ -17,6 +18,12 @@ constexpr int TICKS_PER_REV = ENCODER_SLOTS * GEAR_RATIO;
 constexpr double MAX_FORWARD_M_S = 0.40;
 constexpr double MAX_YAW_RAD_S = 1.5;
 constexpr double MAX_WHEEL_RAD_S = MAX_FORWARD_M_S / WHEEL_RADIUS_M;
+// Floor for a lone slow wheel. Same-direction L/R pairs scale together so a
+// turn keeps a speed difference (a flat min on both sides looked like "both forward").
+constexpr int MIN_MOTOR_DUTY = 120;
+// Breakaway when leaving a full stop. Scaled across both wheels to keep yaw.
+constexpr int MOTOR_KICK_DUTY = 230;
+constexpr unsigned long MOTOR_KICK_MS = 250;
 constexpr double RANGE_MAX_M = 2.0;
 
 // Phone standing on the top plate. Matches the `top` mount in the simulator.
@@ -50,3 +57,6 @@ constexpr int PIN_BUMP = 21;
 // Optional HC-SR04. Leave both at -1 and range_front stays at RANGE_MAX_M.
 constexpr int PIN_RANGE_TRIG = -1;
 constexpr int PIN_RANGE_ECHO = -1;
+
+// Onboard WS2812 RGB: GPIO 38 on DevKitC-1 v1.1, GPIO 48 on v1.0. Set -1 to disable.
+constexpr int PIN_STATUS_RGB = 38;

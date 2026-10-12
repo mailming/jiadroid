@@ -31,7 +31,7 @@ class FollowTest {
         val decision = decide(Scene(true, 0f, 2f))
         assertEquals("Marker is too far", decision.situation)
         assertEquals("FORWARD", decision.command)
-        assertEquals(0.12f, decision.forward, 0.0001f)
+        assertEquals(0.06f, decision.forward, 0.0001f)
         assertEquals(0f, decision.yaw, 0.0001f)
     }
 
@@ -39,7 +39,7 @@ class FollowTest {
     fun centeredAndNearSlowsDown() {
         val decision = decide(Scene(true, 0f, 0.5f))
         assertEquals("SLOW DOWN", decision.command)
-        assertEquals(0.05f, decision.forward, 0.0001f)
+        assertEquals(0.025f, decision.forward, 0.0001f)
     }
 
     @Test
@@ -109,13 +109,61 @@ class FollowTest {
 
     @Test
     fun greetingIsSpokenBack() {
-        assertEquals("Hello. I can see you, and I can hear you.", reply("hello there", "Person is centered"))
+        val spoken = reply("hello there", "Person is centered")
+        assertEquals("Hi! I'm Vicky, the robot with phone eyes. What should we explore?", spoken.say)
+        assertEquals(Emotion.HAPPY, spoken.emotion)
     }
 
     @Test
     fun askingWhatItSeesUsesTheCamera() {
-        assertEquals("I don't see anyone right now.", reply("what do you see", "Person is lost"))
-        assertEquals("I see someone. Person is left.", reply("what are you looking at", "Person is left"))
+        assertEquals("Hmm, my eyes lost you. Wave so I can find you!", reply("what do you see", "Person is lost").say)
+        assertEquals(Emotion.CONFUSED, reply("what do you see", "Person is lost").emotion)
+        assertEquals("I see you! Person is left.", reply("what are you looking at", "Person is left").say)
+    }
+
+    @Test
+    fun wakeNameIsRequiredBeforeAnswering() {
+        assertFalse(parseAttention("what do you see", "vicky").addressed)
+        val hey = parseAttention("hey Vicky, stop", "vicky")
+        assertTrue(hey.addressed)
+        assertEquals("stop", hey.utterance)
+        val only = parseAttention("Vicky", "vicky")
+        assertTrue(only.addressed)
+        assertEquals("", only.utterance)
+        assertEquals("Yes?", reply("", "Person is centered").say)
+        assertEquals(Emotion.CURIOUS, reply("", "Person is centered").emotion)
+    }
+
+    @Test
+    fun wakeOpensAConversationWindowWithoutRepeatingTheName() {
+        val session = AttentionSession(holdMs = 30_000L)
+        val wake = session.consider("hey Vicky", "vicky", requireName = true, nowMs = 1_000L)
+        assertTrue(wake.addressed)
+        assertTrue(wake.newConversation)
+        assertEquals("", wake.utterance)
+        val followUp = session.consider("what do you see", "vicky", requireName = true, nowMs = 5_000L)
+        assertTrue(followUp.addressed)
+        assertFalse(followUp.newConversation)
+        assertEquals("what do you see", followUp.utterance)
+        val late = session.consider("are you there", "vicky", requireName = true, nowMs = 40_000L)
+        assertFalse(late.addressed)
+        val rewake = session.consider("hey Vicky, what's my name", "vicky", requireName = true, nowMs = 41_000L)
+        assertTrue(rewake.addressed)
+        assertTrue(rewake.newConversation)
+        assertEquals("what's my name", rewake.utterance)
+    }
+
+    @Test
+    fun keepAliveExtendsConversationAcrossSlowReplies() {
+        val session = AttentionSession(holdMs = 30_000L)
+        session.consider("hey Vicky", "vicky", requireName = true, nowMs = 1_000L)
+        // Long think + talk would otherwise expire the window at 31_000.
+        session.keepAlive(25_000L)
+        session.keepAlive(40_000L)
+        assertTrue(session.isEngaged(45_000L))
+        val followUp = session.consider("what do you see", "vicky", requireName = true, nowMs = 50_000L)
+        assertTrue(followUp.addressed)
+        assertFalse(followUp.newConversation)
     }
 
     @Test
@@ -124,5 +172,24 @@ class FollowTest {
         stepPose(pose, 0.1f, 0f, 0f, 1f)
         assertEquals(0f, pose.x, 0.0001f)
         assertEquals(0.1f, pose.y, 0.0001f)
+    }
+
+    @Test
+    fun lostTargetScansLeftRightThenBacksUpAndClearsOnReacquire() {
+        val search = LostSearch(graceMs = 200L, maxSearchMs = 5_000L, sliceMs = 1_000L, searchYaw = 0.5f)
+        val hidden = decide(Scene(false, 0f, 0f))
+        search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 0L, subject = "Marker")
+        val left = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 300L, subject = "Marker")
+        assertEquals("SEARCH", left.command)
+        assertTrue(left.yaw > 0f)
+        assertEquals(0f, left.forward, 0.0001f)
+        val right = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 1_300L, subject = "Marker")
+        assertTrue(right.yaw < 0f)
+        val back = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 2_300L, subject = "Marker")
+        assertTrue(back.forward < 0f)
+        assertEquals(0f, back.yaw, 0.0001f)
+        assertTrue(search.searching)
+        search.enrich(Scene(true, 0f, 1f), decide(Scene(true, 0f, 1f)), nowMs = 2_500L, subject = "Marker")
+        assertFalse(search.searching)
     }
 }

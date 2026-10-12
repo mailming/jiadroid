@@ -3,6 +3,7 @@ package dev.jiadroid.follow
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.PointF
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +13,7 @@ import android.util.Size
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.result.contract.ActivityResultContracts
+import android.provider.OpenableColumns
 import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -75,6 +77,13 @@ class MainActivity : AppCompatActivity() {
     private var hearing: String? = null
     private var voiceDecision: FollowDecision? = null
     private var voiceActionUntil = 0L
+    private val lostSearch = LostSearch()
+    private var manualSearch = false
+    private var hadLink = false
+    private var bumpUntil = 0L
+    private var reconnectHappyUntil = 0L
+    private var lastBumpPollAt = 0L
+    private var bumpPolling = false
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -85,12 +94,16 @@ class MainActivity : AppCompatActivity() {
     )
 
     private val requestSenses = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants[Manifest.permission.CAMERA] == true) startCamera() else binding.link.text = getString(R.string.camera_denied)
+        if (grants[Manifest.permission.CAMERA] == true) startCamera() else setLinkText(getString(R.string.camera_denied))
         if (grants[Manifest.permission.RECORD_AUDIO] == true) {
             if (ticking) voice.start()
         } else {
             binding.voiceLine.text = getString(R.string.mic_denied)
         }
+    }
+
+    private val pickFirmware = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) flashFirmware(uri)
     }
 
     private val tick = object : Runnable {
@@ -111,12 +124,37 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, true)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        showDebug(false)
-        binding.eyes.setOnClickListener { showDebug(true) }
-        binding.openDebug.setOnClickListener { showDebug(true) }
-        binding.closeDebug.setOnClickListener { showDebug(false) }
+        showScreen(Screen.Eyes)
+        binding.eyes.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeDebug.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.openSettings.setOnClickListener { showScreen(Screen.Settings) }
+        binding.debugOpenManual.setOnClickListener { showScreen(Screen.Manual) }
+        binding.debugOpenSettings.setOnClickListener { showScreen(Screen.Settings) }
+        binding.settingsOpenDebug.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeSettings.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.manualOpenDebug.setOnClickListener { showScreen(Screen.Debug) }
+        binding.closeManual.setOnClickListener { showScreen(Screen.Eyes) }
+        binding.manualForward.setOnClickListener { applyManual(ManualControl.forward()) }
+        binding.manualSlowForward.setOnClickListener { applyManual(ManualControl.slowForward()) }
+        binding.manualBackward.setOnClickListener { applyManual(ManualControl.backward()) }
+        binding.manualSlowBackward.setOnClickListener { applyManual(ManualControl.slowBackward()) }
+        binding.manualLeft.setOnClickListener { applyManual(ManualControl.left()) }
+        binding.manualRight.setOnClickListener { applyManual(ManualControl.right()) }
+        binding.manualSearch.setOnClickListener { applyManualSearch() }
+        binding.manualStop.setOnClickListener { applyManual(ManualControl.stop()) }
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
+        }
+        binding.connectUsb.setOnClickListener {
+            if (link.get() != null) disconnect() else connectOverUsb()
+        }
+        binding.wifiSave.setOnClickListener { saveRobotWifi() }
+        binding.firmwareFlash.setOnClickListener {
+            if (link.get() == null || link.get()?.supports("firmware.begin") != true) {
+                setLinkText(getString(R.string.firmware_need_link))
+                return@setOnClickListener
+            }
+            pickFirmware.launch(arrayOf("application/octet-stream", "*/*"))
         }
         binding.host.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_DONE) {
@@ -132,6 +170,7 @@ class MainActivity : AppCompatActivity() {
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
+            onEmotion = { binding.eyes.setEmotion(it) },
             onAction = ::applyVoiceAction,
         )
         binding.saySend.setOnClickListener { sayTyped() }
@@ -144,10 +183,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val prefs = getPreferences(MODE_PRIVATE)
+        binding.robotName.setText(prefs.getString(PREF_ROBOT_NAME, DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() }))
         binding.brainUrl.setText(prefs.getString(PREF_BRAIN_URL, DEFAULT_BRAIN_URL))
         binding.brainModel.setText(prefs.getString(PREF_BRAIN_MODEL, DEFAULT_BRAIN_MODEL))
         binding.brainKey.setText(prefs.getString(PREF_BRAIN_KEY, ""))
         binding.brainUse.setOnClickListener { useBrain(save = true) }
+        binding.robotName.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                useBrain(save = true)
+                true
+            } else {
+                false
+            }
+        }
         useBrain(save = false)
         val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
@@ -190,20 +238,71 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun step(dt: Float) {
-        val fresh = lastScene.visible && SystemClock.elapsedRealtime() - lastMarkerAt < HOLD_MS
+        val now = SystemClock.elapsedRealtime()
+        val fresh = lastScene.visible && now - lastMarkerAt < HOLD_MS
         val scene = if (fresh) lastScene else Scene(false, 0f, 0f)
         if (!fresh) {
             lastScene = scene
             markerCorners = null
             binding.overlay.setMarker(null, 0, 0, "")
         }
-        val decision = currentDecision(decide(scene, subject))
+        val follow = decide(scene, subject)
+        val decision = when {
+            // Manual Search runs left → right → backup until the person is seen or Stop.
+            manualSearch -> {
+                val looking = lostSearch.enrich(scene, follow, now, subject)
+                if (scene.visible || !lostSearch.searching) {
+                    manualSearch = false
+                }
+                looking
+            }
+            voiceDecision != null -> {
+                lostSearch.clear()
+                currentDecision(follow)
+            }
+            else -> currentDecision(lostSearch.enrich(scene, follow, now, subject))
+        }
         if (decision.command == "STOP") gait = 0f else gait += dt * 7f
         stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
         binding.eyes.render(decision, if (scene.visible) gazeY else 0f)
+        refreshFace(decision, now)
+        pollBump(now)
         show(decision, scene)
         send(decision, force = false)
+    }
+
+    /** Eyes are the audience face — link / bump / search beat conversation mood. */
+    private fun refreshFace(decision: FollowDecision, now: Long) {
+        when {
+            hadLink && link.get() == null -> binding.eyes.setEmotion(Emotion.SAD)
+            now < bumpUntil -> binding.eyes.setEmotion(Emotion.EXCITED)
+            now < reconnectHappyUntil -> binding.eyes.setEmotion(Emotion.HAPPY)
+            decision.command == "SEARCH" -> binding.eyes.setEmotion(Emotion.CURIOUS)
+        }
+    }
+
+    private fun pollBump(now: Long) {
+        val robot = link.get() ?: return
+        if (!robot.hasSensor("bump") || bumpPolling || now - lastBumpPollAt < 250L) return
+        lastBumpPollAt = now
+        bumpPolling = true
+        io.execute {
+            try {
+                if (link.get() !== robot) return@execute
+                val hit = robot.readSensor("bump") >= 0.5
+                if (hit) {
+                    handler.post {
+                        if (link.get() !== robot) return@post
+                        bumpUntil = SystemClock.elapsedRealtime() + 1_200L
+                        binding.eyes.setEmotion(Emotion.EXCITED)
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                bumpPolling = false
+            }
+        }
     }
 
     /**
@@ -211,18 +310,77 @@ class MainActivity : AppCompatActivity() {
      * hands control back to the camera follower.
      */
     private fun applyVoiceAction(action: VoiceAction) {
+        manualSearch = false
         if (action.motion == VoiceMotion.FOLLOW) {
             voiceDecision = null
             voiceActionUntil = 0L
+            lastCommandKey = null
+            // Clear any latched manual/voice drive so Follow Me can take over.
+            send(ManualControl.stop(), force = true)
+            return
+        }
+        lostSearch.clear()
+        val decision = action.decision()
+        val previous = voiceDecision
+        voiceDecision = decision
+        voiceActionUntil = if (action.durationMs > 0L) {
+            SystemClock.elapsedRealtime() + action.durationMs
         } else {
-            voiceDecision = action.decision()
-            voiceActionUntil = if (action.durationMs > 0L) {
-                SystemClock.elapsedRealtime() + action.durationMs
-            } else {
-                Long.MAX_VALUE
-            }
+            Long.MAX_VALUE
         }
         lastCommandKey = null
+        // Same path as the Debug pad: push to the body immediately, don't wait
+        // for the next camera tick (voice used to miss the robot that way).
+        if (previous != null && manualNeedsCoast(previous, decision)) {
+            send(ManualControl.stop(), force = true)
+            handler.postDelayed({
+                if (voiceDecision === decision) send(decision, force = true)
+            }, 100L)
+        } else {
+            send(decision, force = true)
+        }
+    }
+
+    /** Debug pad Search: same left / right / backup scan as auto reacquire. */
+    private fun applyManualSearch() {
+        voiceDecision = null
+        voiceActionUntil = 0L
+        manualSearch = true
+        lostSearch.begin(SystemClock.elapsedRealtime())
+        lastCommandKey = null
+    }
+
+    /** Debug pad: hold the chosen move until Stop or another button. */
+    private fun applyManual(decision: FollowDecision) {
+        manualSearch = false
+        lostSearch.clear()
+        val previous = voiceDecision
+        voiceDecision = decision
+        voiceActionUntil = Long.MAX_VALUE
+        lastCommandKey = null
+        // Coast briefly when flipping drive direction so the L9110S/motors
+        // are not asked to reverse under load (Left→Back often failed that way).
+        if (previous != null && manualNeedsCoast(previous, decision)) {
+            send(ManualControl.stop(), force = true)
+            handler.postDelayed({
+                if (voiceDecision === decision) send(decision, force = true)
+            }, 100L)
+        } else {
+            send(decision, force = true)
+        }
+    }
+
+    private fun manualNeedsCoast(previous: FollowDecision, next: FollowDecision): Boolean {
+        if (next.command == "STOP" || previous.command == "STOP") return false
+        val prevForward = previous.forward != 0f
+        val nextForward = next.forward != 0f
+        if (prevForward && nextForward && previous.forward > 0f != next.forward > 0f) return true
+        val prevTurn = previous.yaw != 0f
+        val nextTurn = next.yaw != 0f
+        if (prevTurn && nextTurn && previous.yaw > 0f != next.yaw > 0f) return true
+        if (prevTurn && nextForward && next.forward < 0f) return true
+        if (nextTurn && prevForward && previous.forward < 0f) return true
+        return false
     }
 
     private fun currentDecision(follow: FollowDecision): FollowDecision {
@@ -275,39 +433,66 @@ class MainActivity : AppCompatActivity() {
         if (text.isEmpty()) return
         binding.say.text = null
         hideKeyboard()
-        voice.answer(text)
+        voice.answer(text, requireName = false)
     }
 
     private fun useBrain(save: Boolean) {
+        val name = binding.robotName.text?.toString()?.trim().orEmpty()
+            .ifEmpty { DEFAULT_ROBOT_NAME.replaceFirstChar { it.titlecase() } }
+        binding.robotName.setText(name)
         val url = binding.brainUrl.text?.toString()?.trim().orEmpty()
         val model = binding.brainModel.text?.toString()?.trim().orEmpty()
         val key = binding.brainKey.text?.toString()?.trim().orEmpty()
         if (save) {
             getPreferences(MODE_PRIVATE).edit()
+                .putString(PREF_ROBOT_NAME, name)
                 .putString(PREF_BRAIN_URL, url)
                 .putString(PREF_BRAIN_MODEL, model)
                 .putString(PREF_BRAIN_KEY, key)
                 .apply()
             hideKeyboard()
         }
+        voice.robotName = name
         voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
-        binding.brainStatus.text = if (voice.brain == null) {
-            getString(R.string.brain_local)
-        } else {
-            getString(R.string.brain_on, model, url)
+        binding.brainStatus.text = when {
+            voice.brain == null -> getString(R.string.brain_local)
+            key.isEmpty() -> getString(R.string.brain_need_key)
+            else -> getString(R.string.brain_on, model, url)
         }
     }
 
-    private fun showDebug(show: Boolean) {
-        // Keep Debug mode laid out behind the eyes. CameraX needs PreviewView's
-        // surface even when the user only sees the normal eyes screen.
+    private fun showScreen(screen: Screen) {
+        // Keep Debug mode laid out behind Eyes/Settings. CameraX needs PreviewView's
+        // surface even when the user only sees another screen.
+        if (screen != Screen.Manual &&
+            (manualSearch || voiceDecision?.situation?.startsWith("Manual:") == true)
+        ) {
+            manualSearch = false
+            applyManual(ManualControl.stop())
+            // Hand the body back to the camera follower after leaving the pad.
+            voiceDecision = null
+            voiceActionUntil = 0L
+        }
         binding.debugMode.visibility = android.view.View.VISIBLE
-        binding.normalMode.visibility = if (show) android.view.View.GONE else android.view.View.VISIBLE
-        if (!show) binding.normalMode.bringToFront()
+        binding.normalMode.visibility = if (screen == Screen.Eyes) android.view.View.VISIBLE else android.view.View.GONE
+        binding.settingsMode.visibility = if (screen == Screen.Settings) android.view.View.VISIBLE else android.view.View.GONE
+        binding.manualMode.visibility = if (screen == Screen.Manual) android.view.View.VISIBLE else android.view.View.GONE
+        when (screen) {
+            Screen.Eyes -> binding.normalMode.bringToFront()
+            Screen.Settings -> binding.settingsMode.bringToFront()
+            Screen.Debug -> binding.debugMode.bringToFront()
+            Screen.Manual -> binding.manualMode.bringToFront()
+        }
         currentFocus?.clearFocus()
         hideKeyboard()
         // Showing the camera preview can reset the emulator microphone. Open it again.
         if (::voice.isInitialized) handler.postDelayed({ voice.reopen() }, 400)
+    }
+
+    private fun setLinkText(text: CharSequence?) {
+        binding.link.text = text
+        binding.debugLink.text = text
+        binding.manualLink.text = text
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {
@@ -319,7 +504,7 @@ class MainActivity : AppCompatActivity() {
         val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "nothing seen"
         val robot = link.get()
         val where = if (robot == null) "phone sim" else robot.safety
-        binding.detail.text = String.format(
+        val detail = String.format(
             Locale.US,
             "forward %.2f m/s   turn %.2f rad/s   head %.2f   %s   %s",
             decision.forward,
@@ -328,6 +513,10 @@ class MainActivity : AppCompatActivity() {
             range,
             where,
         )
+        binding.detail.text = detail
+        binding.manualCommand.text = decision.command
+        binding.manualCommand.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
+        binding.manualDetail.text = detail
     }
 
     private fun send(decision: FollowDecision, force: Boolean) {
@@ -344,9 +533,9 @@ class MainActivity : AppCompatActivity() {
                 if (link.get() !== robot) return@execute
                 if (decision.command == "STOP") robot.stop() else robot.walk(decision)
             } catch (error: RobotException) {
-                handler.post { binding.link.text = error.message }
+                handler.post { setLinkText(error.message) }
             } catch (error: RobotException) {
-                handler.post { binding.link.text = error.message }
+                handler.post { setLinkText(error.message) }
             } catch (error: Exception) {
                 handler.post { onLinkFailed(robot, error) }
             }
@@ -362,30 +551,186 @@ class MainActivity : AppCompatActivity() {
         if (connecting || link.get() != null) return
         val endpoint = parseEndpoint(binding.host.text?.toString().orEmpty())
         if (endpoint == null) {
-            binding.link.text = getString(R.string.need_address)
+            setLinkText(getString(R.string.need_address))
             return
         }
         hideKeyboard()
         connecting = true
-        binding.connect.isEnabled = false
-        binding.link.text = getString(R.string.connecting)
+        setLinkButtonsEnabled(false)
+        setLinkText(getString(R.string.connecting))
         val (host, port) = endpoint
         io.execute {
             try {
                 val robot = RobotClient.connect(host, port)
                 handler.post {
-                    connecting = false
-                    binding.connect.isEnabled = true
-                    link.set(robot)
-                    lastCommandKey = null
-                    binding.connect.text = getString(R.string.disconnect)
-                    binding.link.text = getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port)
+                    onLinked(robot, getString(R.string.connected, robot.name, robot.kind, robot.deviceCount, host, port))
                 }
             } catch (error: Exception) {
                 handler.post {
                     connecting = false
-                    binding.connect.isEnabled = true
-                    binding.link.text = error.message ?: getString(R.string.need_address)
+                    setLinkButtonsEnabled(true)
+                    setLinkText(error.message ?: getString(R.string.need_address))
+                }
+            }
+        }
+    }
+
+    private fun connectOverUsb() {
+        if (connecting || link.get() != null) return
+        hideKeyboard()
+        connecting = true
+        setLinkButtonsEnabled(false)
+        setLinkText(getString(R.string.connecting))
+        io.execute {
+            try {
+                val robot = UsbRobotLink.connect(this)
+                handler.post {
+                    onLinked(robot, getString(R.string.connected_usb, robot.name, robot.kind, robot.deviceCount))
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    connecting = false
+                    setLinkButtonsEnabled(true)
+                    setLinkText(error.message ?: getString(R.string.need_usb))
+                }
+            }
+        }
+    }
+
+    private fun onLinked(robot: RobotClient, status: String) {
+        connecting = false
+        setLinkButtonsEnabled(true)
+        link.set(robot)
+        hadLink = true
+        lastCommandKey = null
+        reconnectHappyUntil = SystemClock.elapsedRealtime() + 1_500L
+        bumpUntil = 0L
+        binding.eyes.setEmotion(Emotion.HAPPY)
+        binding.connect.text = getString(R.string.disconnect)
+        binding.connectUsb.text = getString(R.string.disconnect)
+        setLinkText(status)
+        binding.wifiSave.isEnabled = robot.supports("wifi.set")
+        binding.firmwareFlash.isEnabled = robot.supports("firmware.begin")
+        if (robot.supports("wifi.status")) {
+            io.execute {
+                try {
+                    val wifi = robot.wifiStatus()
+                    val ssid = wifi.optString("ssid")
+                    handler.post {
+                        if (link.get() !== robot) return@post
+                        if (ssid.isNotEmpty()) binding.wifiSsid.setText(ssid)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun setLinkButtonsEnabled(enabled: Boolean) {
+        binding.connect.isEnabled = enabled
+        binding.connectUsb.isEnabled = enabled
+    }
+
+    private fun saveRobotWifi() {
+        val robot = link.get()
+        if (robot == null || !robot.supports("wifi.set")) {
+            setLinkText(getString(R.string.firmware_need_link))
+            return
+        }
+        val ssid = binding.wifiSsid.text?.toString()?.trim().orEmpty()
+        val password = binding.wifiPassword.text?.toString().orEmpty()
+        if (ssid.isEmpty()) {
+            setLinkText(getString(R.string.wifi_need_ssid))
+            return
+        }
+        hideKeyboard()
+        binding.wifiSave.isEnabled = false
+        io.execute {
+            try {
+                robot.setWifi(ssid, password)
+                handler.post {
+                    if (link.get() !== robot) return@post
+                    setLinkText(getString(R.string.wifi_saved, ssid))
+                    binding.voiceLine.text = getString(R.string.wifi_joining, ssid)
+                }
+                val ready = waitForWifiAddress(robot)
+                handler.post {
+                    binding.wifiSave.isEnabled = link.get() === robot
+                    if (link.get() !== robot) return@post
+                    if (ready != null) {
+                        setLinkText(getString(R.string.wifi_ready, ready))
+                        binding.voiceLine.text = getString(R.string.wifi_ready, ready)
+                        binding.eyes.setEmotion(Emotion.HAPPY)
+                        reconnectHappyUntil = SystemClock.elapsedRealtime() + 2_000L
+                    } else {
+                        setLinkText(getString(R.string.wifi_saved_no_ip, ssid))
+                        binding.voiceLine.text = getString(R.string.wifi_saved_no_ip, ssid)
+                    }
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    binding.wifiSave.isEnabled = link.get() === robot
+                    setLinkText(error.message ?: getString(R.string.wifi_need_ssid))
+                }
+            }
+        }
+    }
+
+    /** Poll until the chassis reports a LAN IP after Save Wi‑Fi (USB link stays up). */
+    private fun waitForWifiAddress(robot: RobotClient): String? {
+        if (!robot.supports("wifi.status")) return null
+        repeat(40) { attempt ->
+            if (link.get() !== robot) return null
+            try {
+                val status = robot.wifiStatus()
+                val ip = status.optString("ip").trim()
+                if (status.optBoolean("connected") && ip.isNotEmpty()) {
+                    return "$ip:8765"
+                }
+            } catch (_: Exception) {
+            }
+            if (attempt < 39) Thread.sleep(500L)
+        }
+        return null
+    }
+
+    private fun flashFirmware(uri: Uri) {
+        val robot = link.get()
+        if (robot == null || !robot.supports("firmware.begin")) {
+            setLinkText(getString(R.string.firmware_need_link))
+            return
+        }
+        val size = contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else -1L
+        } ?: -1L
+        if (size <= 0L) {
+            setLinkText(getString(R.string.firmware_need_link))
+            return
+        }
+        binding.firmwareFlash.isEnabled = false
+        binding.wifiSave.isEnabled = false
+        setLinkText(getString(R.string.firmware_uploading, 0))
+        io.execute {
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    robot.installFirmware(input, size) { sent ->
+                        val pct = ((sent * 100) / size).toInt().coerceIn(0, 100)
+                        handler.post { setLinkText(getString(R.string.firmware_uploading, pct)) }
+                    }
+                } ?: throw IllegalStateException("Can't open the firmware file")
+                handler.post {
+                    disconnect()
+                    setLinkText(getString(R.string.firmware_done))
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    binding.firmwareFlash.isEnabled = link.get()?.supports("firmware.begin") == true
+                    binding.wifiSave.isEnabled = link.get()?.supports("wifi.set") == true
+                    setLinkText(error.message ?: getString(R.string.firmware_need_link))
+                    if (link.get() === robot) {
+                        // Upload may have rebooted the board already.
+                        onLinkFailed(robot, error)
+                    }
                 }
             }
         }
@@ -394,8 +739,15 @@ class MainActivity : AppCompatActivity() {
     private fun disconnect() {
         val robot = link.getAndSet(null)
         lastCommandKey = null
+        lostSearch.clear()
+        bumpUntil = 0L
+        reconnectHappyUntil = 0L
+        if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
         binding.connect.text = getString(R.string.connect)
-        binding.link.text = getString(R.string.link_idle)
+        binding.connectUsb.text = getString(R.string.connect_usb)
+        binding.wifiSave.isEnabled = false
+        binding.firmwareFlash.isEnabled = false
+        setLinkText(getString(R.string.link_idle))
         if (robot != null) release(robot)
     }
 
@@ -412,10 +764,17 @@ class MainActivity : AppCompatActivity() {
     private fun onLinkFailed(robot: RobotClient, error: Exception) {
         if (!link.compareAndSet(robot, null)) return
         lastCommandKey = null
+        lostSearch.clear()
+        bumpUntil = 0L
+        reconnectHappyUntil = 0L
+        if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
         binding.connect.text = getString(R.string.connect)
-        binding.link.text = error.message ?: getString(R.string.link_idle)
+        binding.connectUsb.text = getString(R.string.connect_usb)
+        binding.wifiSave.isEnabled = false
+        binding.firmwareFlash.isEnabled = false
+        setLinkText(error.message ?: getString(R.string.link_idle))
         release(robot)
-        Log.i(TAG, "simulator link closed", error)
+        Log.i(TAG, "robot link closed", error)
     }
 
     private fun parseEndpoint(text: String): Pair<String, Int>? {
@@ -673,6 +1032,13 @@ class MainActivity : AppCompatActivity() {
         return uprightFieldOfView(rotation, uprightWidth, uprightHeight, sensorHfov, sensorVfov)
     }
 
+    private enum class Screen {
+        Eyes,
+        Debug,
+        Settings,
+        Manual,
+    }
+
     companion object {
         private const val TAG = "Jiadroid"
         private const val HOLD_MS = 400L
@@ -680,10 +1046,11 @@ class MainActivity : AppCompatActivity() {
         private const val SUBJECT_MARKER = "Marker"
         private const val SUBJECT_PERSON = "Person"
         private const val TALK_LINES = 40
+        private const val PREF_ROBOT_NAME = "robot_name"
         private const val PREF_BRAIN_URL = "brain_url"
         private const val PREF_BRAIN_MODEL = "brain_model"
         private const val PREF_BRAIN_KEY = "brain_key"
         private const val DEFAULT_BRAIN_URL = "https://api.anthropic.com/v1"
-        private const val DEFAULT_BRAIN_MODEL = "claude-haiku-4-5"
+        private const val DEFAULT_BRAIN_MODEL = "claude-haiku-5-5"
     }
 }

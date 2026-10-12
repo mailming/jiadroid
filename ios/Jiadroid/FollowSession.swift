@@ -29,6 +29,14 @@ final class FollowSession: ObservableObject, CameraSink {
     private var voiceSession: VoiceSession?
     private var talk: [String] = []
     private var hearing: String?
+    private let lostSearch = LostSearch()
+    private var voiceDecision: FollowDecision?
+    private var voiceActionUntil = Date.distantPast
+    private var hadLink = false
+    private var bumpUntil = Date.distantPast
+    private var reconnectHappyUntil = Date.distantPast
+    private var lastBumpPollAt = Date.distantPast
+    private var bumpPolling = false
 
     func start() {
         camera.sink = self
@@ -49,7 +57,9 @@ final class FollowSession: ObservableObject, CameraSink {
                 seeing: { [weak self] in self?.status.situation ?? "Marker is lost" },
                 onLine: { [weak self] line in self?.voice.line = line },
                 onTurn: { [weak self] who, text in self?.logTurn(who, text) },
-                onHearing: { [weak self] text in self?.logHearing(text) }
+                onHearing: { [weak self] text in self?.logHearing(text) },
+                onEmotion: { [weak self] emotion in self?.voice.emotion = emotion },
+                onAction: { [weak self] action in self?.applyVoiceAction(action) }
             )
             loadBrain(save: false)
         }
@@ -89,11 +99,15 @@ final class FollowSession: ObservableObject, CameraSink {
         let text = voice.say.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return }
         voice.say = ""
-        voiceSession?.answer(text)
+        voiceSession?.answer(text, requireName: false)
     }
 
     func useBrain(save: Bool) {
         loadBrain(save: save)
+    }
+
+    func saveRobotName() {
+        loadBrain(save: true)
     }
 
     /// Showing the camera preview can reset the microphone. Open it again.
@@ -108,6 +122,108 @@ final class FollowSession: ObservableObject, CameraSink {
             disconnect()
         } else {
             connect()
+        }
+    }
+
+    func toggleUsb() {
+        if robot != nil {
+            disconnect()
+        } else {
+            connectOverUsb()
+        }
+    }
+
+    func saveWifi() {
+        guard let robot = currentRobot(), robot.supports("wifi.set") else {
+            link.linkText = "Connect to the robot first (Wi‑Fi), then save credentials."
+            return
+        }
+        let ssid = link.wifiSsid.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ssid.isEmpty {
+            link.linkText = "Enter the robot Wi‑Fi name, then tap Save Wi‑Fi."
+            return
+        }
+        let password = link.wifiPassword
+        link.wifiBusy = true
+        io.async { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try robot.setWifi(ssid: ssid, password: password)
+                DispatchQueue.main.async {
+                    guard self.currentRobot() === robot else { return }
+                    self.link.linkText = "Saved Wi‑Fi “\(ssid)”. Robot is joining the network…"
+                    self.voice.line = "Joining “\(ssid)”…"
+                }
+                let ready = self.waitForWifiAddress(robot)
+                DispatchQueue.main.async {
+                    self.link.wifiBusy = false
+                    guard self.currentRobot() === robot else { return }
+                    if let ready {
+                        let message = "Ready for iPhone · \(ready)"
+                        self.link.linkText = message
+                        self.voice.line = message
+                        self.voice.emotion = .happy
+                        self.reconnectHappyUntil = Date().addingTimeInterval(2)
+                    } else {
+                        let message = "Saved Wi‑Fi “\(ssid)”, but no IP yet. Check the network and try Connect with host:8765."
+                        self.link.linkText = message
+                        self.voice.line = message
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.link.wifiBusy = false
+                    self.link.linkText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Poll until the chassis reports a LAN IP after Save Wi‑Fi.
+    private func waitForWifiAddress(_ robot: RobotClient) -> String? {
+        guard robot.supports("wifi.status") else { return nil }
+        for attempt in 0..<40 {
+            guard currentRobot() === robot else { return nil }
+            if let status = try? robot.wifiStatus() {
+                let ip = (status["ip"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let connected = status["connected"] as? Bool ?? false
+                if connected && !ip.isEmpty { return "\(ip):8765" }
+            }
+            if attempt < 39 { Thread.sleep(forTimeInterval: 0.5) }
+        }
+        return nil
+    }
+
+    func flashFirmware(_ data: Data) {
+        guard let robot = currentRobot(), robot.supports("firmware.begin") else {
+            link.linkText = "Connect to the robot over Wi‑Fi first, then pick a firmware.bin."
+            return
+        }
+        link.wifiBusy = true
+        link.linkText = "Uploading firmware… 0%"
+        io.async { [weak self] in
+            do {
+                try robot.installFirmware(data: data) { sent in
+                    let pct = data.isEmpty ? 0 : Int((Double(sent) * 100) / Double(data.count))
+                    DispatchQueue.main.async {
+                        self?.link.linkText = "Uploading firmware… \(pct)%"
+                    }
+                }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.disconnect()
+                    self.link.linkText = "Firmware uploaded. Robot is rebooting — reconnect in a few seconds."
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.link.wifiBusy = false
+                    self.link.linkText = error.localizedDescription
+                    if self.currentRobot() === robot {
+                        self.failLink(robot, error)
+                    }
+                }
+            }
         }
     }
 
@@ -151,7 +267,15 @@ final class FollowSession: ObservableObject, CameraSink {
             sim.corners = []
             sim.gazeY = 0
         }
-        let decision = decide(shown, subject: subject)
+        let follow = decide(shown, subject: subject)
+        let tracked: FollowDecision
+        if voiceDecision != nil {
+            lostSearch.clear()
+            tracked = follow
+        } else {
+            tracked = lostSearch.enrich(scene: shown, follow: follow, now: now, subject: subject)
+        }
+        let decision = currentDecision(tracked, now: now)
         sim.gait = decision.command == "STOP" ? 0 : sim.gait + dt * 7
         stepPose(&sim.pose, forward: decision.forward, lateral: decision.lateral, yaw: decision.yaw, dt: dt)
         sim.trail.append((sim.pose.x, sim.pose.y))
@@ -167,8 +291,74 @@ final class FollowSession: ObservableObject, CameraSink {
         lookY += (vertical - lookY) * 0.25
         sim.lookX = lookX
         sim.lookY = lookY
+        refreshFace(decision, now: now)
+        pollBump(now: now)
         show(decision, shown)
         send(decision, force: false)
+    }
+
+    private func applyVoiceAction(_ action: VoiceAction) {
+        if action.motion == .follow {
+            voiceDecision = nil
+            voiceActionUntil = .distantPast
+            lastCommandKey = nil
+            send(FollowDecision(situation: "Voice command: follow", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0), force: true)
+            return
+        }
+        lostSearch.clear()
+        let decision = action.decision()
+        voiceDecision = decision
+        voiceActionUntil = action.durationMs > 0
+            ? Date().addingTimeInterval(action.durationMs)
+            : .distantFuture
+        lastCommandKey = nil
+        // Same path as the Debug pad: push to the body immediately.
+        send(decision, force: true)
+    }
+
+    private func currentDecision(_ follow: FollowDecision, now: Date) -> FollowDecision {
+        guard let manual = voiceDecision else { return follow }
+        if voiceActionUntil != .distantFuture && now >= voiceActionUntil {
+            let stopped = VoiceAction(motion: .stop).decision()
+            voiceDecision = stopped
+            voiceActionUntil = .distantFuture
+            lastCommandKey = nil
+            return stopped
+        }
+        return manual
+    }
+
+    /// Eyes are the audience face — link / bump / search beat conversation mood.
+    private func refreshFace(_ decision: FollowDecision, now: Date) {
+        if hadLink && currentRobot() == nil {
+            voice.emotion = .sad
+        } else if now < bumpUntil {
+            voice.emotion = .excited
+        } else if now < reconnectHappyUntil {
+            voice.emotion = .happy
+        } else if decision.command == "SEARCH" {
+            voice.emotion = .curious
+        }
+    }
+
+    private func pollBump(now: Date) {
+        guard let robot = currentRobot(), robot.hasSensor("bump"), !bumpPolling else { return }
+        guard now.timeIntervalSince(lastBumpPollAt) >= 0.25 else { return }
+        lastBumpPollAt = now
+        bumpPolling = true
+        io.async { [weak self] in
+            defer {
+                DispatchQueue.main.async { self?.bumpPolling = false }
+            }
+            guard let self, self.currentRobot() === robot else { return }
+            let hit = ((try? robot.readSensor("bump")) ?? 0) >= 0.5
+            guard hit else { return }
+            DispatchQueue.main.async {
+                guard self.currentRobot() === robot else { return }
+                self.bumpUntil = Date().addingTimeInterval(1.2)
+                self.voice.emotion = .excited
+            }
+        }
     }
 
     private func show(_ decision: FollowDecision, _ scene: Scene) {
@@ -220,7 +410,7 @@ final class FollowSession: ObservableObject, CameraSink {
     private func connect() {
         if link.connecting || robot != nil { return }
         guard let endpoint = parseEndpoint(link.host) else {
-            link.linkText = "Enter the laptop address, or use the phone simulator alone."
+            link.linkText = "Enter a Wi‑Fi address, tap USB for cable guidance, or use the phone simulator alone."
             return
         }
         link.connecting = true
@@ -236,11 +426,10 @@ final class FollowSession: ObservableObject, CameraSink {
                         robot.close()
                         return
                     }
-                    self.link.connecting = false
-                    self.setRobot(robot)
-                    self.lastCommandKey = nil
-                    self.link.connected = true
-                    self.link.linkText = "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices at \(host):\(port)"
+                    self.onLinked(
+                        robot,
+                        "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices at \(host):\(port)"
+                    )
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -252,11 +441,72 @@ final class FollowSession: ObservableObject, CameraSink {
         }
     }
 
+    private func connectOverUsb() {
+        if link.connecting || robot != nil { return }
+        link.connecting = true
+        link.linkText = "Connecting…"
+        connectGeneration += 1
+        let generation = connectGeneration
+        io.async { [weak self] in
+            do {
+                let robot = try UsbRobotLink.connect()
+                DispatchQueue.main.async {
+                    guard let self, self.connectGeneration == generation else {
+                        robot.close()
+                        return
+                    }
+                    self.onLinked(
+                        robot,
+                        "Sending commands to \(robot.name) (\(robot.kind)) · \(robot.deviceCount) devices over USB‑C"
+                    )
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self, self.connectGeneration == generation else { return }
+                    self.link.connecting = false
+                    self.link.linkText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func onLinked(_ robot: RobotClient, _ status: String) {
+        link.connecting = false
+        setRobot(robot)
+        hadLink = true
+        lastCommandKey = nil
+        bumpUntil = .distantPast
+        reconnectHappyUntil = Date().addingTimeInterval(1.5)
+        voice.emotion = .happy
+        link.connected = true
+        link.canConfigureWifi = robot.supports("wifi.set")
+        link.canFlashFirmware = robot.supports("firmware.begin")
+        link.linkText = status
+        if robot.supports("wifi.status") {
+            io.async { [weak self] in
+                guard let statusBody = try? robot.wifiStatus() else { return }
+                let ssid = statusBody["ssid"] as? String ?? ""
+                DispatchQueue.main.async {
+                    guard let self, self.currentRobot() === robot else { return }
+                    if !ssid.isEmpty { self.link.wifiSsid = ssid }
+                }
+            }
+        }
+    }
+
     private func disconnect() {
         connectGeneration += 1
         let robot = swapRobot(nil)
         lastCommandKey = nil
+        lostSearch.clear()
+        bumpUntil = .distantPast
+        reconnectHappyUntil = .distantPast
+        if hadLink { voice.emotion = .sad }
         link.connected = false
+        link.connecting = false
+        link.wifiBusy = false
+        link.canConfigureWifi = false
+        link.canFlashFirmware = false
         link.linkText = "Not connected. The duck above still follows what the camera sees."
         if let robot { release(robot) }
     }
@@ -265,7 +515,14 @@ final class FollowSession: ObservableObject, CameraSink {
         guard currentRobot() === robot else { return }
         setRobot(nil)
         lastCommandKey = nil
+        lostSearch.clear()
+        bumpUntil = .distantPast
+        reconnectHappyUntil = .distantPast
+        if hadLink { voice.emotion = .sad }
         link.connected = false
+        link.wifiBusy = false
+        link.canConfigureWifi = false
+        link.canFlashFirmware = false
         link.linkText = error.localizedDescription
         release(robot)
     }
@@ -350,14 +607,19 @@ final class FollowSession: ObservableObject, CameraSink {
     private func loadBrain(save: Bool) {
         let defaults = UserDefaults.standard
         if save {
+            let name = voice.robotName.trimmingCharacters(in: .whitespacesAndNewlines)
+            voice.robotName = name.isEmpty ? defaultRobotName.capitalized : name
+            defaults.set(voice.robotName, forKey: Self.prefRobotName)
             defaults.set(voice.brainURL, forKey: Self.prefBrainURL)
             defaults.set(voice.brainModel, forKey: Self.prefBrainModel)
             defaults.set(voice.brainKey, forKey: Self.prefBrainKey)
         } else {
-            voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? ""
-            voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? ""
+            voice.robotName = defaults.string(forKey: Self.prefRobotName) ?? defaultRobotName.capitalized
+            voice.brainURL = defaults.string(forKey: Self.prefBrainURL) ?? Self.defaultBrainURL
+            voice.brainModel = defaults.string(forKey: Self.prefBrainModel) ?? Self.defaultBrainModel
             voice.brainKey = defaults.string(forKey: Self.prefBrainKey) ?? ""
         }
+        voiceSession?.robotName = voice.robotName
         let url = voice.brainURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = voice.brainModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = voice.brainKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -366,14 +628,19 @@ final class FollowSession: ObservableObject, CameraSink {
             voice.brainStatus = "Replies come from the phone. Add a model URL for real conversation."
         } else {
             voiceSession?.brain = Brain(baseURL: url, model: model, key: key)
-            voice.brainStatus = "Replies come from \(model) at \(url)."
+            voice.brainStatus = key.isEmpty
+                ? "Model URL is set, but the API key field is empty. Paste the key here (a Mac shell export does not reach the phone), then tap Use."
+                : "Replies come from \(model) at \(url)."
         }
     }
 
     private static let talkLines = 40
+    private static let prefRobotName = "robot_name"
     private static let prefBrainURL = "brain_url"
     private static let prefBrainModel = "brain_model"
     private static let prefBrainKey = "brain_key"
+    private static let defaultBrainURL = "https://api.anthropic.com/v1"
+    private static let defaultBrainModel = "claude-haiku-5-5"
 }
 
 final class SimModel: ObservableObject {
@@ -399,11 +666,16 @@ final class StatusModel: ObservableObject {
 
 final class LinkModel: ObservableObject {
     @Published var host = ""
+    @Published var wifiSsid = ""
+    @Published var wifiPassword = ""
     @Published var markerMM = "120"
     @Published var personMM = "1700"
     @Published var linkText = "Not connected. The duck above still follows what the camera sees."
     @Published var connected = false
     @Published var connecting = false
+    @Published var wifiBusy = false
+    @Published var canConfigureWifi = false
+    @Published var canFlashFirmware = false
     @Published var cameraMessage: String?
 }
 
@@ -411,8 +683,10 @@ final class VoiceModel: ObservableObject {
     @Published var line = "Listening"
     @Published var talkLog = "What you say and what it answers shows here."
     @Published var say = ""
-    @Published var brainURL = ""
-    @Published var brainModel = ""
+    @Published var emotion: Emotion = .listening
+    @Published var robotName = defaultRobotName.capitalized
+    @Published var brainURL = "https://api.anthropic.com/v1"
+    @Published var brainModel = "claude-haiku-5-5"
     @Published var brainKey = ""
     @Published var brainStatus = "Replies come from the phone. Add a model URL for real conversation."
 }

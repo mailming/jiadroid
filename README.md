@@ -97,7 +97,7 @@ That split is the point: the phone is the brain, and the robot keeps the reflexe
 
 ## First prototype: a 2WD chassis, phone on top
 
-The first base is a [DIYables 2WD robot car chassis](https://www.amazon.com/dp/B0H4V8TR38): two DC motors with encoders, an L9110S motor driver, a caster, and a top plate. The kit is listed at 0.32 kg. The phone stands on that plate, screen facing forward, because Follow Me uses the front camera. A phone lying flat would look at the ceiling.
+The first base is a [DIYables 2WD robot car chassis](https://www.amazon.com/dp/B0H4V8TR38): two DC motors with encoders, an L9110S motor driver, a caster, and a top plate. The kit is listed at 0.32 kg. The phone stands on that plate, screen facing forward, because Follow Me defaults to the front camera. A phone lying flat would look at the ceiling. Switching to the back camera (sharper, focusable) is on the feature list when the mount or scene needs it.
 
 The chassis announces one mount, `top`, and only a move command. The same Follow Me app drives it, scaled to about 0.4 m/s. In the simulator this is `--robot rover`. The wheel track, the plate height, and the encoder slot count are the usual ones for this kind of chassis; the listing does not print them, so they get measured on the real plate.
 
@@ -153,7 +153,7 @@ The Android and iOS apps follow a real person, a printed photo of a person, or a
 1. Pick a target. A real person needs nothing printed; set Person height to their height in millimeters (1700 by default). For a desk test, print `android/marker/printed-person.svg` at actual size (the ruler on the sheet reads 100 mm) and set Person height to 230. For the QR marker, print `android/marker/mini-person.svg` (60 mm code) or `mini-person-large.svg` (120 mm code) and set QR code to match.
 2. Open the `android` folder in Android Studio, or `ios/Jiadroid.xcodeproj` in Xcode, and run it on a phone. The iPhone build needs a signing team selected in Xcode. A simulator has no useful camera for the printed marker.
 3. Point the camera at the target. Center it and the duck walks forward. Move it to either side and the duck turns. Come too close, or leave the view, and the duck stops.
-4. To drive a laptop simulator as well, start one where the phone can reach it, then enter that address in the app and tap Connect.
+4. To drive a laptop simulator or the chassis over Wi‑Fi, start one where the phone can reach it, then enter that address and tap **Connect**. On Android you can instead plug USB‑C OTG into the board USB port and tap **USB**, then **Save Wi‑Fi** so later phones (including iPhone) can use the LAN. **Flash .bin** pushes a new sketch over that link (Wi‑Fi preferred). On iPhone, **USB** explains that serial is unavailable; after the robot is on Wi‑Fi, Connect / Save Wi‑Fi / Flash .bin work the same.
 
 ```bash
 python -m pip install -e .
@@ -184,19 +184,29 @@ Pixel 8 Pro setup, coordinate frames, sampling guidance, and limitations.
 - A shared language between phone and robot, version 0.2. The robot announces what kind of body it is, which motion and head commands it accepts with their limits, its parts, and where a phone can be mounted. The phone sends commands scaled to those limits, and reports its own weight, size, and which mount it is on. The robot reports what it is doing.
 - Safety built into the language. A stop command halts motion, an emergency stop blocks all movement until someone clears it, and a reset puts a simulated robot back on its feet.
 - Three simulated bodies behind that one language: a kinematic Open Duck Mini, a two-wheel rover, and an Open Duck Mini in MuJoCo physics.
-- ESP32-S3 firmware for the 2WD chassis. It speaks this language over Wi-Fi, drives the L9110S from `motion.velocity`, and counts the wheel encoders. See [docs/firmware.md](docs/firmware.md).
+- ESP32-S3 firmware for the 2WD chassis. On `main` it speaks this language over Wi-Fi; on `feature/usb-c-link` it can also use USB‑C serial from an Android phone (phone powers the board). iPhone uses Wi‑Fi on that branch. It drives the L9110S from `motion.velocity` and counts the wheel encoders. Phone can save robot Wi‑Fi into NVS and push OTA firmware over the link. See [docs/firmware.md](docs/firmware.md).
 - A Gymnasium environment for the physics duck, matched to the Open Duck project's observation and action layout, with a PPO training script and ONNX export. Trained policies run in the simulator and, as ONNX, on the duck's own runtime.
 - Follow Me logic that decides where the robot should go, and rescales that decision to any body.
 - The laptop demo above, where the decision side and the robot side are separate programs talking through that language over a local network connection, the same kind Wi-Fi would carry.
-- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default, listen and answer out loud, keep the conversation on a Debug screen with the camera and simulated duck, and send the motion command to any of the laptop simulators.
+- Android and iOS apps that follow a real person, a printed photo of one, or a printed mini-person marker. Both show a pair of eyes by default (mood from conversation, plus link-lost / bump / reconnect / search), listen and answer out loud only after the wake name (default Vicky), keep talk and camera on a Debug screen with the simulated duck, and send motion to a linked chassis or laptop simulator. Both map clear spoken commands (stop / follow / turn / forward / back) to brief motion. After Save Wi‑Fi they poll for the chassis IP and show “Ready for iPhone · ip:8765”. When the person is lost they gently yaw-search instead of sitting on STOP.
 
 ## What is not built yet
 
+### Follow Me MVP (next)
+
+- Front / back camera switch. Today only the front camera is used. The back camera is often sharper and can focus; useful for distant people, markers, table edges, or looking at the floor. Needs remapped mirroring and a dock that can face either way.
+- Phone soft-stop on bump / near range (eyes already react to bump when the switch is wired; motion does not yet soft-stop on it).
+- Speak softer when the person is close (distance is already measured).
+- A vertical phone dock on the 2WD plate, and a measured bring-up of motors / encoders on the real chassis.
+- One rehearsed demo script.
+
+### Later / platform
+
 - A trained walker that walks well. The training environment and script are here, and a few million steps produce a duck that stands and shuffles. Walking as well as the Open Duck project's policies needs longer training and its imitation reward, which relies on reference motions this repository does not ship. See [docs/training.md](docs/training.md).
 - Telling people apart. With several people in view, the phone follows whichever one the pose detector picks.
-- ESP32 firmware that speaks this language and drives a real body. A dock that mounts the phone on the duck, and a connection from that ESP32 to a real Open Duck Mini, so the phone's `motion.velocity` is written into `RLWalk.last_commands` in place of the game controller.
-- Bluetooth and USB connections. The phone reaches the simulators, and the chassis firmware, over Wi-Fi.
-- A measured 2WD chassis. The wheel track, plate height, and encoder slot count in the simulator and the firmware are the usual ones for this kit, and should be checked on the real plate.
+- A dock that mounts the phone on Open Duck Mini, and a connection from the ESP32 to that duck so the phone's `motion.velocity` is written into `RLWalk.last_commands` in place of the game controller.
+- Bluetooth. USB‑C serial for the chassis is on branch `feature/usb-c-link` (Android OTG). iPhone Follow Me on that branch matches the Debug UI and protocol client, but still talks over Wi‑Fi only.
+- Table-edge awareness, obstacle wander, voice butler (rooms / “come here”), ball picker, and other sparks in the [idea bank](docs/idea-bank.md).
 
 ## Where this goes
 
@@ -206,4 +216,4 @@ The larger goal is: "My phone can give intelligence to any compatible machine."
 
 After Follow Me, the same phone could add voice commands, obstacle avoidance, and navigation. The same connection could then reach grippers, arms, garden tools, or other devices, so hardware makers and app makers can build for one shared platform.
 
-The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md). Flashing the 2WD chassis is in [docs/firmware.md](docs/firmware.md).
+The technical contract between phone and robot is in [docs/protocol.md](docs/protocol.md). Training the duck's walk with reinforcement learning is in [docs/training.md](docs/training.md). Flashing the 2WD chassis is in [docs/firmware.md](docs/firmware.md). Product and platform sparks live in the [idea bank](docs/idea-bank.md) (table-edge math, ball pickers, and more). Constrained prompts for a cuter eye mood table (Gemini / ChatGPT / design tools) are in [docs/eyes-design.md](docs/eyes-design.md).

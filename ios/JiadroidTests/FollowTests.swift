@@ -5,4 +5,42 @@ final class FollowTests: XCTestCase {
     func testFollowLogicMatchesTheAndroidApp() throws {
         try FollowLogicTests.run()
     }
+
+    func testTrailingEmotionTagIsStripped() {
+        let spoken = parseSpokenReply("Hello there. <<happy>>")
+        XCTAssertEqual(spoken.say, "Hello there.")
+        XCTAssertEqual(spoken.emotion, .happy)
+    }
+
+    func testJsonEmotionReply() {
+        let spoken = parseSpokenReply(#"{"say":"I see you.","emotion":"curious"}"#)
+        XCTAssertEqual(spoken.say, "I see you.")
+        XCTAssertEqual(spoken.emotion, .curious)
+    }
+
+    func testLocalGreetingIsHappy() {
+        XCTAssertEqual(reply(heard: "hello", seeing: "Person is centered").emotion, .happy)
+    }
+
+    func testWakeOpensAConversationWindow() {
+        let session = AttentionSession(holdSeconds: 30)
+        let wake = session.consider(heard: "hey Vicky", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 1))
+        XCTAssertTrue(wake.addressed)
+        XCTAssertTrue(wake.newConversation)
+        let followUp = session.consider(heard: "what do you see", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 5))
+        XCTAssertTrue(followUp.addressed)
+        XCTAssertFalse(followUp.newConversation)
+        XCTAssertEqual(followUp.utterance, "what do you see")
+        let late = session.consider(heard: "are you there", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 40))
+        XCTAssertFalse(late.addressed)
+        let rewake = session.consider(
+            heard: "hey Vicky, what's my name",
+            name: "vicky",
+            requireName: true,
+            now: Date(timeIntervalSince1970: 41)
+        )
+        XCTAssertTrue(rewake.addressed)
+        XCTAssertTrue(rewake.newConversation)
+        XCTAssertEqual(rewake.utterance, "what's my name")
+    }
 }

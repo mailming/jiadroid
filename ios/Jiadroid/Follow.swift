@@ -134,18 +134,93 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
     if scene.angle < -alignRad {
-        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.04, lateral: 0, yaw: 0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.20, headYaw: headYaw)
     }
     if scene.angle > alignRad {
-        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.04, lateral: 0, yaw: -0.8, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.20, headYaw: headYaw)
     }
     if scene.distance > farM {
-        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.06, lateral: 0, yaw: 0, headYaw: headYaw)
     }
     if scene.distance < slowM {
-        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.05, lateral: 0, yaw: 0, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.025, lateral: 0, yaw: 0, headYaw: headYaw)
     }
-    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
+    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.04, lateral: 0, yaw: 0, headYaw: headYaw)
+}
+
+/// When the target disappears, wait briefly then scan left, right, and reverse
+/// to reacquire. Cancels immediately when the person is seen again.
+final class LostSearch {
+    private let grace: TimeInterval
+    private let maxSearch: TimeInterval
+    private let slice: TimeInterval
+    private let searchYaw: Float
+    private let searchBackup: Float
+    private var lostSince: Date?
+    private(set) var searching = false
+
+    init(
+        grace: TimeInterval = 0.4,
+        maxSearch: TimeInterval = 8,
+        slice: TimeInterval = 0.5,
+        searchYaw: Float = 0.32,
+        searchBackup: Float = -0.08
+    ) {
+        self.grace = grace
+        self.maxSearch = maxSearch
+        self.slice = slice
+        self.searchYaw = searchYaw
+        self.searchBackup = searchBackup
+    }
+
+    func clear() {
+        lostSince = nil
+        searching = false
+    }
+
+    func enrich(scene: Scene, follow: FollowDecision, now: Date = Date(), subject: String) -> FollowDecision {
+        if scene.visible {
+            clear()
+            return follow
+        }
+        if lostSince == nil { lostSince = now }
+        let lostFor = now.timeIntervalSince(lostSince ?? now)
+        if lostFor < grace || lostFor > maxSearch {
+            searching = false
+            return follow
+        }
+        searching = true
+        let phase = Int((lostFor - grace) / slice) % 3
+        switch phase {
+        case 0:
+            return FollowDecision(
+                situation: "\(subject) is lost — looking left",
+                command: "SEARCH",
+                forward: 0,
+                lateral: 0,
+                yaw: searchYaw,
+                headYaw: min(0.5, max(-0.5, searchYaw))
+            )
+        case 1:
+            return FollowDecision(
+                situation: "\(subject) is lost — looking right",
+                command: "SEARCH",
+                forward: 0,
+                lateral: 0,
+                yaw: -searchYaw,
+                headYaw: min(0.5, max(-0.5, -searchYaw))
+            )
+        default:
+            return FollowDecision(
+                situation: "\(subject) is lost — backing up",
+                command: "SEARCH",
+                forward: searchBackup,
+                lateral: 0,
+                yaw: 0,
+                headYaw: 0
+            )
+        }
+    }
 }
 
 func stepPose(_ pose: inout Pose, forward: Float, lateral: Float, yaw: Float, dt: Float) {
@@ -197,7 +272,7 @@ enum FollowLogicTests {
         let far = decide(Scene(visible: true, angle: 0, distance: 2))
         try expect(far.situation == "Marker is too far", "far situation")
         try expect(far.command == "FORWARD", "far command")
-        try expect(abs(far.forward - 0.12) < 0.0001, "far speed")
+        try expect(abs(far.forward - 0.06) < 0.0001, "far speed")
         try expect(abs(far.yaw) < 0.0001, "far yaw")
 
         let near = decide(Scene(visible: true, angle: 0, distance: 0.5))
@@ -213,6 +288,30 @@ enum FollowLogicTests {
         let hidden = decide(Scene(visible: false, angle: 0.4, distance: 1))
         try expect(hidden.situation == "Marker is lost", "lost situation")
         try expect(hidden.command == "STOP", "lost command")
+
+        let search = LostSearch(grace: 0.2, maxSearch: 5, slice: 1.0, searchYaw: 0.5)
+        let t0 = Date()
+        _ = search.enrich(
+            scene: Scene(visible: false, angle: 0, distance: 0),
+            follow: hidden,
+            now: t0,
+            subject: "Marker"
+        )
+        let looking = search.enrich(
+            scene: Scene(visible: false, angle: 0, distance: 0),
+            follow: hidden,
+            now: t0.addingTimeInterval(1),
+            subject: "Marker"
+        )
+        try expect(looking.command == "SEARCH", "search command")
+        try expect(search.searching, "search active")
+        _ = search.enrich(
+            scene: Scene(visible: true, angle: 0, distance: 1),
+            follow: decide(Scene(visible: true, angle: 0, distance: 1)),
+            now: t0.addingTimeInterval(2),
+            subject: "Marker"
+        )
+        try expect(!search.searching, "search clears on reacquire")
 
         let scene = measure(centerX: 800, widthPx: 100, imageWidth: 1000, hfovRad: hfov, markerWidthM: 0.06)
         try expect(scene.visible, "measured visible")
@@ -254,9 +353,17 @@ enum FollowLogicTests {
         try expect(abs(pose.y - 0.1) < 0.0001, "pose y \(pose.y)")
 
         try expect(
-            reply(heard: "hello there", seeing: "Person is centered") == "Hello. I can see you, and I can hear you.",
+            reply(heard: "hello there", seeing: "Person is centered").say
+                == "Hi! I'm Vicky, the robot with phone eyes. What should we explore?",
             "greeting"
         )
+        try expect(!parseAttention(heard: "what do you see", name: "vicky").addressed, "wake required")
+        let hey = parseAttention(heard: "hey Vicky, stop", name: "vicky")
+        try expect(hey.addressed && hey.utterance == "stop", "wake strips name")
+        try expect(reply(heard: "", seeing: "Person is centered").say == "Yes?", "name only")
+        try expect(parseVoiceAction("turn right now")?.motion == .turnRight, "voice turn")
+        try expect(parseVoiceAction("follow me")?.motion == .follow, "voice follow")
+        try expect(parseVoiceAction("do not turn right") == nil, "voice negation")
         try expect(
             reply(heard: "what do you see", seeing: "Person is lost") == "I don't see anyone right now.",
             "lost sight"

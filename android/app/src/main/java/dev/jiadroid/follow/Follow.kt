@@ -157,18 +157,87 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
     if (scene.distance < CLOSE_M) return stopped("$subject is too close")
     val headYaw = scene.angle.coerceIn(-0.5f, 0.5f)
     if (scene.angle < -ALIGN_RAD) {
-        return FollowDecision("$subject is left", "TURN LEFT", 0.04f, 0f, 0.8f, headYaw)
+        return FollowDecision("$subject is left", "TURN LEFT", 0.07f, 0f, 0.20f, headYaw)
     }
     if (scene.angle > ALIGN_RAD) {
-        return FollowDecision("$subject is right", "TURN RIGHT", 0.04f, 0f, -0.8f, headYaw)
+        return FollowDecision("$subject is right", "TURN RIGHT", 0.07f, 0f, -0.20f, headYaw)
     }
     if (scene.distance > FAR_M) {
-        return FollowDecision("$subject is too far", "FORWARD", 0.12f, 0f, 0f, headYaw)
+        return FollowDecision("$subject is too far", "FORWARD", 0.06f, 0f, 0f, headYaw)
     }
     if (scene.distance < SLOW_M) {
-        return FollowDecision("$subject is centered", "SLOW DOWN", 0.05f, 0f, 0f, headYaw)
+        return FollowDecision("$subject is centered", "SLOW DOWN", 0.025f, 0f, 0f, headYaw)
     }
-    return FollowDecision("$subject is centered", "FORWARD", 0.08f, 0f, 0f, headYaw)
+    return FollowDecision("$subject is centered", "FORWARD", 0.04f, 0f, 0f, headYaw)
+}
+
+/**
+ * When the target disappears, wait briefly then scan: look left, look right,
+ * ease backward, repeat — so the camera can catch the person again. Cancels
+ * as soon as they are visible.
+ */
+class LostSearch(
+    private val graceMs: Long = 400L,
+    private val maxSearchMs: Long = 8_000L,
+    private val sliceMs: Long = 500L,
+    private val searchYaw: Float = 0.32f,
+    private val searchBackup: Float = -0.08f,
+) {
+    private var lostSinceMs: Long? = null
+    var searching: Boolean = false
+        private set
+
+    fun clear() {
+        lostSinceMs = null
+        searching = false
+    }
+
+    /** Start scanning immediately (manual Search pad), skipping the grace wait. */
+    fun begin(nowMs: Long) {
+        lostSinceMs = nowMs - graceMs
+        searching = true
+    }
+
+    fun enrich(scene: Scene, follow: FollowDecision, nowMs: Long, subject: String): FollowDecision {
+        if (scene.visible) {
+            clear()
+            return follow
+        }
+        val started = lostSinceMs ?: nowMs.also { lostSinceMs = it }
+        val lostFor = nowMs - started
+        if (lostFor < graceMs || lostFor > maxSearchMs) {
+            searching = false
+            return follow
+        }
+        searching = true
+        val phase = ((lostFor - graceMs) / sliceMs % 3L).toInt()
+        return when (phase) {
+            0 -> FollowDecision(
+                "$subject is lost — looking left",
+                "SEARCH",
+                0f,
+                0f,
+                searchYaw,
+                searchYaw.coerceIn(-0.5f, 0.5f),
+            )
+            1 -> FollowDecision(
+                "$subject is lost — looking right",
+                "SEARCH",
+                0f,
+                0f,
+                -searchYaw,
+                (-searchYaw).coerceIn(-0.5f, 0.5f),
+            )
+            else -> FollowDecision(
+                "$subject is lost — backing up",
+                "SEARCH",
+                searchBackup,
+                0f,
+                0f,
+                0f,
+            )
+        }
+    }
 }
 
 fun stepPose(pose: Pose, forward: Float, lateral: Float, yaw: Float, dt: Float) {

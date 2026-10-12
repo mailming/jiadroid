@@ -1,29 +1,69 @@
 package dev.jiadroid.follow
 
 /**
- * Turns heard speech into a spoken reply.
+ * Turns heard speech into a spoken reply plus a face emotion.
  *
  * Reachy Mini streams the microphone to a realtime language model. This phone
- * answers on the device so it can talk with no API key. The function is the
- * only place that reply comes from.
+ * answers on the device so it can talk with no API key. [memory] and [kb] let
+ * local replies recall recent turns and persisted audience facts.
  */
-fun reply(heard: String, seeing: String): String {
+fun reply(
+    heard: String,
+    seeing: String,
+    name: String = DEFAULT_ROBOT_NAME,
+    memory: TalkMemory? = null,
+    kb: AudienceKb? = null,
+): SpokenReply {
     val said = heard.trim().replace(Regex("\\s+"), " ")
-    if (said.isEmpty()) return "I didn't catch that."
+    val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
+    if (said.isEmpty()) return SpokenReply("Yes?", Emotion.CURIOUS)
+    kb?.recallReply(said)?.let { return it }
+    memory?.recallReply(said)?.let { return it }
     val lower = said.lowercase()
     if (Regex("""\b(hi|hello|hey)\b""").containsMatchIn(lower)) {
-        return "Hello. I can see you, and I can hear you."
-    }
-    if (lower.contains("who are you") || lower.contains("your name")) {
-        return "I am the phone on the robot. I follow you, and I can talk."
-    }
-    if (lower.contains("follow")) return "I am following. Stay in front of me."
-    if (lower.contains("see") || lower.contains("looking") || lower.contains("where")) {
-        return if (seeing.contains("lost", ignoreCase = true)) {
-            "I don't see anyone right now."
+        val known = kb?.noteCount()?.let { it > 0 } == true || memory?.chatTurns()?.isNotEmpty() == true
+        return if (known) {
+            SpokenReply("Hey, you're back! Want to play follow-the-leader again?", Emotion.HAPPY)
         } else {
-            "I see someone. $seeing."
+            SpokenReply(
+                "Hi! I'm $who, the robot with phone eyes. What should we explore?",
+                Emotion.HAPPY,
+            )
         }
     }
-    return "I heard you say $said."
+    if (lower.contains("who are you") || lower.contains("your name")) {
+        return SpokenReply(
+            "I'm $who — rolling buddy with big phone eyes. Say my name and I'll listen.",
+            Emotion.HAPPY,
+        )
+    }
+    if (lower.contains("follow")) {
+        return SpokenReply("On it! Stay where I can see you and I'll tag along.", Emotion.EXCITED)
+    }
+    if (lower.contains("see") || lower.contains("looking") || lower.contains("where")) {
+        return if (seeing.contains("lost", ignoreCase = true)) {
+            SpokenReply("Hmm, my eyes lost you. Wave so I can find you!", Emotion.CONFUSED)
+        } else {
+            SpokenReply("I see you! $seeing.", Emotion.CURIOUS)
+        }
+    }
+    if (Regex("""\b(thank|thanks|good job|love you)\b""").containsMatchIn(lower)) {
+        return SpokenReply("Aww, thanks! That made my wheels happy.", Emotion.HAPPY)
+    }
+    if (Regex("""\b(sad|sorry|hurt|scared)\b""").containsMatchIn(lower)) {
+        return SpokenReply("I'm right here with you. Want to tell me about it?", Emotion.SAD)
+    }
+    if (Regex(
+            """(?:my name is|i am|i'm|call me)\s+\w+|not\s+\w+[,.]?\s+(?:it'?s|it is)\s+\w+|(?:dog|cat)'?s?\s+name\s+is\s+\w+|(?:dog|cat)\s+is\s+(?:named|called)\s+\w+""",
+        ).containsMatchIn(lower)
+    ) {
+        return SpokenReply("Got it! I'll update what I remember on this phone.", Emotion.HAPPY)
+    }
+    if (Regex("""(?:remember(?: that)?|don't forget)\b""").containsMatchIn(lower)) {
+        return SpokenReply("Okay, locking that into my memory vault.", Emotion.HAPPY)
+    }
+    if (Regex("""(?:i like|i love)\b""").containsMatchIn(lower)) {
+        return SpokenReply("Nice! I'll remember you like that.", Emotion.HAPPY)
+    }
+    return SpokenReply("I heard you say $said. Tell me more!", Emotion.CURIOUS)
 }

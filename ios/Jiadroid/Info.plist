@@ -29,7 +29,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Speech recognition turns what you say into text on the phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>The app sends walk commands to the duck simulator on your Wi-Fi, and can reach a language model on your laptop.</string>
+	<string>The app sends walk commands to a Jiadroid robot or laptop simulator on your Wi‑Fi, and can reach a language model on your laptop. iPhone uses Wi‑Fi for the robot; USB serial is Android-only.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

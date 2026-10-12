@@ -24,6 +24,11 @@ static const int kLeftBChannel = 1;
 static const int kRightAChannel = 2;
 static const int kRightBChannel = 3;
 
+static bool leftWasDriven = false;
+static bool rightWasDriven = false;
+static unsigned long leftKickUntilMs = 0;
+static unsigned long rightKickUntilMs = 0;
+
 void IRAM_ATTR leftEncoderIsr() {
     int direction = gpio_get_level((gpio_num_t)PIN_LEFT_ENC_B) ? 1 : -1;
     portENTER_CRITICAL_ISR(&tickMux);
@@ -45,28 +50,33 @@ static int32_t readTicks(volatile int32_t *ticks) {
     return value;
 }
 
-static void writeWheel(int channelA, int channelB, double radPerSec, int invert) {
+static int speedToDuty(double radPerSec, int invert, double *signedVel) {
     double velocity = radPerSec * invert;
     if (!isfinite(velocity)) {
         velocity = 0;
     }
+    *signedVel = velocity;
     double magnitude = fabs(velocity);
     if (magnitude > MAX_WHEEL_RAD_S) {
         magnitude = MAX_WHEEL_RAD_S;
     }
     int duty = (int)lround(magnitude / MAX_WHEEL_RAD_S * 255.0);
     if (duty < 0) {
-        duty = 0;
+        return 0;
     }
     if (duty > 255) {
-        duty = 255;
+        return 255;
     }
-    if (duty == 0) {
+    return duty;
+}
+
+static void driveChannels(int channelA, int channelB, double signedVel, int duty) {
+    if (duty <= 0 || fabs(signedVel) < 1e-9) {
         ledcWrite(channelA, 0);
         ledcWrite(channelB, 0);
         return;
     }
-    if (velocity > 0) {
+    if (signedVel > 0) {
         ledcWrite(channelA, duty);
         ledcWrite(channelB, 0);
     } else {
@@ -75,8 +85,95 @@ static void writeWheel(int channelA, int channelB, double radPerSec, int invert)
     }
 }
 
+static void scaleDuties(int *leftDuty, int *rightDuty, double scale) {
+    int left = (int)lround(*leftDuty * scale);
+    int right = (int)lround(*rightDuty * scale);
+    if (left > 255) {
+        left = 255;
+    }
+    if (right > 255) {
+        right = 255;
+    }
+    *leftDuty = left;
+    *rightDuty = right;
+}
+
+// Drive both wheels together so min-PWM / kick boost keep any L/R ratio (yaw).
+static void writeWheels(double leftRadS, double rightRadS, unsigned long nowMs) {
+    double leftVel = 0;
+    double rightVel = 0;
+    int leftDuty = speedToDuty(leftRadS, MOTOR_INVERT_LEFT, &leftVel);
+    int rightDuty = speedToDuty(rightRadS, MOTOR_INVERT_RIGHT, &rightVel);
+
+    if (leftDuty == 0) {
+        leftWasDriven = false;
+        leftKickUntilMs = 0;
+    }
+    if (rightDuty == 0) {
+        rightWasDriven = false;
+        rightKickUntilMs = 0;
+    }
+    if (leftDuty == 0 && rightDuty == 0) {
+        driveChannels(kLeftAChannel, kLeftBChannel, 0, 0);
+        driveChannels(kRightAChannel, kRightBChannel, 0, 0);
+        return;
+    }
+
+    bool sameDir =
+        (leftRadS > 1e-6 && rightRadS > 1e-6) || (leftRadS < -1e-6 && rightRadS < -1e-6);
+    if (sameDir && leftDuty > 0 && rightDuty > 0) {
+        int lo = leftDuty < rightDuty ? leftDuty : rightDuty;
+        int hi = leftDuty < rightDuty ? rightDuty : leftDuty;
+        if (hi < MIN_MOTOR_DUTY) {
+            scaleDuties(&leftDuty, &rightDuty, (double)MIN_MOTOR_DUTY / hi);
+        } else if (lo < MIN_MOTOR_DUTY) {
+            double scale = (double)MIN_MOTOR_DUTY / lo;
+            if (hi * scale <= 255.0) {
+                scaleDuties(&leftDuty, &rightDuty, scale);
+            } else {
+                scaleDuties(&leftDuty, &rightDuty, 255.0 / hi);
+            }
+        }
+    } else {
+        if (leftDuty > 0 && leftDuty < MIN_MOTOR_DUTY) {
+            leftDuty = MIN_MOTOR_DUTY;
+        }
+        if (rightDuty > 0 && rightDuty < MIN_MOTOR_DUTY) {
+            rightDuty = MIN_MOTOR_DUTY;
+        }
+    }
+
+    if (leftDuty > 0 && !leftWasDriven) {
+        leftWasDriven = true;
+        leftKickUntilMs = nowMs + MOTOR_KICK_MS;
+    }
+    if (rightDuty > 0 && !rightWasDriven) {
+        rightWasDriven = true;
+        rightKickUntilMs = nowMs + MOTOR_KICK_MS;
+    }
+    bool kicking = (leftKickUntilMs != 0 && (long)(nowMs - leftKickUntilMs) < 0) ||
+                   (rightKickUntilMs != 0 && (long)(nowMs - rightKickUntilMs) < 0);
+    if (kicking && sameDir && leftDuty > 0 && rightDuty > 0) {
+        int hi = leftDuty > rightDuty ? leftDuty : rightDuty;
+        if (hi > 0 && hi < MOTOR_KICK_DUTY) {
+            scaleDuties(&leftDuty, &rightDuty, (double)MOTOR_KICK_DUTY / hi);
+        }
+    } else if (kicking) {
+        if (leftDuty > 0 && leftDuty < MOTOR_KICK_DUTY) {
+            leftDuty = MOTOR_KICK_DUTY;
+        }
+        if (rightDuty > 0 && rightDuty < MOTOR_KICK_DUTY) {
+            rightDuty = MOTOR_KICK_DUTY;
+        }
+    }
+
+    driveChannels(kLeftAChannel, kLeftBChannel, leftVel, leftDuty);
+    driveChannels(kRightAChannel, kRightBChannel, rightVel, rightDuty);
+}
+
 static void setupPwm(int channel, int pin) {
-    ledcSetup(channel, 20000, 8);
+    // ~1 kHz: many L9110S modules stall or only hiss at 20 kHz.
+    ledcSetup(channel, 1000, 8);
     ledcAttachPin(pin, channel);
     ledcWrite(channel, 0);
 }
@@ -167,8 +264,7 @@ void chassisSetWheels(double leftRadS, double rightRadS) {
 void chassisStopMotors() {
     leftCommand = 0;
     rightCommand = 0;
-    writeWheel(kLeftAChannel, kLeftBChannel, 0, MOTOR_INVERT_LEFT);
-    writeWheel(kRightAChannel, kRightBChannel, 0, MOTOR_INVERT_RIGHT);
+    writeWheels(0, 0, millis());
 }
 
 double chassisLeft() { return leftCommand; }
@@ -209,8 +305,7 @@ void chassisPoll(unsigned long nowMs) {
             right = (0 + yaw * WHEEL_BASE_M / 2) / WHEEL_RADIUS_M;
         }
     }
-    writeWheel(kLeftAChannel, kLeftBChannel, left, MOTOR_INVERT_LEFT);
-    writeWheel(kRightAChannel, kRightBChannel, right, MOTOR_INVERT_RIGHT);
+    writeWheels(left, right, nowMs);
 }
 
 void chassisPose(double *x, double *y, double *yaw) {
