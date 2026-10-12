@@ -78,6 +78,7 @@ class MainActivity : AppCompatActivity() {
     private var voiceDecision: FollowDecision? = null
     private var voiceActionUntil = 0L
     private val lostSearch = LostSearch()
+    private var manualSearch = false
     private var hadLink = false
     private var bumpUntil = 0L
     private var reconnectHappyUntil = 0L
@@ -139,7 +140,7 @@ class MainActivity : AppCompatActivity() {
         binding.manualSlowBackward.setOnClickListener { applyManual(ManualControl.slowBackward()) }
         binding.manualLeft.setOnClickListener { applyManual(ManualControl.left()) }
         binding.manualRight.setOnClickListener { applyManual(ManualControl.right()) }
-        binding.manualSearch.setOnClickListener { applyManual(ManualControl.search()) }
+        binding.manualSearch.setOnClickListener { applyManualSearch() }
         binding.manualStop.setOnClickListener { applyManual(ManualControl.stop()) }
         binding.connect.setOnClickListener {
             if (link.get() != null) disconnect() else connectToLaptop()
@@ -246,14 +247,21 @@ class MainActivity : AppCompatActivity() {
             binding.overlay.setMarker(null, 0, 0, "")
         }
         val follow = decide(scene, subject)
-        // Voice holds (stop / turn) cancel the search spin; otherwise look for the person.
-        val tracked = if (voiceDecision != null) {
-            lostSearch.clear()
-            follow
-        } else {
-            lostSearch.enrich(scene, follow, now, subject)
+        val decision = when {
+            // Manual Search runs left → right → backup until the person is seen or Stop.
+            manualSearch -> {
+                val looking = lostSearch.enrich(scene, follow, now, subject)
+                if (scene.visible || !lostSearch.searching) {
+                    manualSearch = false
+                }
+                looking
+            }
+            voiceDecision != null -> {
+                lostSearch.clear()
+                currentDecision(follow)
+            }
+            else -> currentDecision(lostSearch.enrich(scene, follow, now, subject))
         }
-        val decision = currentDecision(tracked)
         if (decision.command == "STOP") gait = 0f else gait += dt * 7f
         stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
@@ -302,23 +310,49 @@ class MainActivity : AppCompatActivity() {
      * hands control back to the camera follower.
      */
     private fun applyVoiceAction(action: VoiceAction) {
+        manualSearch = false
         if (action.motion == VoiceMotion.FOLLOW) {
             voiceDecision = null
             voiceActionUntil = 0L
-        } else {
-            lostSearch.clear()
-            voiceDecision = action.decision()
-            voiceActionUntil = if (action.durationMs > 0L) {
-                SystemClock.elapsedRealtime() + action.durationMs
-            } else {
-                Long.MAX_VALUE
-            }
+            lastCommandKey = null
+            // Clear any latched manual/voice drive so Follow Me can take over.
+            send(ManualControl.stop(), force = true)
+            return
         }
+        lostSearch.clear()
+        val decision = action.decision()
+        val previous = voiceDecision
+        voiceDecision = decision
+        voiceActionUntil = if (action.durationMs > 0L) {
+            SystemClock.elapsedRealtime() + action.durationMs
+        } else {
+            Long.MAX_VALUE
+        }
+        lastCommandKey = null
+        // Same path as the Debug pad: push to the body immediately, don't wait
+        // for the next camera tick (voice used to miss the robot that way).
+        if (previous != null && manualNeedsCoast(previous, decision)) {
+            send(ManualControl.stop(), force = true)
+            handler.postDelayed({
+                if (voiceDecision === decision) send(decision, force = true)
+            }, 100L)
+        } else {
+            send(decision, force = true)
+        }
+    }
+
+    /** Debug pad Search: same left / right / backup scan as auto reacquire. */
+    private fun applyManualSearch() {
+        voiceDecision = null
+        voiceActionUntil = 0L
+        manualSearch = true
+        lostSearch.begin(SystemClock.elapsedRealtime())
         lastCommandKey = null
     }
 
     /** Debug pad: hold the chosen move until Stop or another button. */
     private fun applyManual(decision: FollowDecision) {
+        manualSearch = false
         lostSearch.clear()
         val previous = voiceDecision
         voiceDecision = decision
@@ -430,7 +464,10 @@ class MainActivity : AppCompatActivity() {
     private fun showScreen(screen: Screen) {
         // Keep Debug mode laid out behind Eyes/Settings. CameraX needs PreviewView's
         // surface even when the user only sees another screen.
-        if (screen != Screen.Manual && voiceDecision?.situation?.startsWith("Manual:") == true) {
+        if (screen != Screen.Manual &&
+            (manualSearch || voiceDecision?.situation?.startsWith("Manual:") == true)
+        ) {
+            manualSearch = false
             applyManual(ManualControl.stop())
             // Hand the body back to the camera follower after leaving the pad.
             voiceDecision = null

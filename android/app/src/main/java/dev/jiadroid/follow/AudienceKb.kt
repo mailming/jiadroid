@@ -6,7 +6,10 @@ package dev.jiadroid.follow
  * Survives wake-window expiry, new conversations, and app restarts. Only short-term
  * [TalkMemory] resets when a new wake opens after silence.
  *
- * - **Pin:** `name`, `likes`, `from`, and compacted `summary` never expire or get FIFO'd.
+ * - **Pin:** `name`, `likes`, `from`, pet / favorite keys, and compacted `summary`
+ *   never expire or get FIFO'd.
+ * - **Replace:** repeating “my name is…”, “my dog’s name is…”, or “actually…” updates
+ *   the same key instead of stacking conflicting notes.
  * - **Cap:** at most [maxFacts] freeform `fact-*` notes.
  * - **TTL:** freeform facts older than [factTtlMs] are dropped (default 30 days).
  * - **Compact:** when over the fact cap, oldest facts fold into `summary`.
@@ -59,13 +62,20 @@ class AudienceKb(
         persist()
     }
 
+    /**
+     * Absorb durable facts from one user line.
+     * @return keys that changed (with prior value when replacing), so [TalkMemory]
+     * can rewrite mis-heard mentions in the live chat window.
+     */
     @Synchronized
-    fun rememberFrom(user: String) {
+    fun rememberFrom(user: String): List<KbChange> {
         val said = user.trim().replace(Regex("""\s+"""), " ")
-        if (said.isEmpty()) return
-        if (!absorb(said)) return
+        if (said.isEmpty()) return emptyList()
+        val changes = absorb(said)
+        if (changes.isEmpty()) return emptyList()
         maintain()
         persist()
+        return changes
     }
 
     @Synchronized
@@ -97,6 +107,18 @@ class AudienceKb(
                 SpokenReply("I don't know your name yet. Tell me, and I'll remember.", Emotion.CURIOUS)
             } else {
                 SpokenReply("You're $name.", Emotion.HAPPY)
+            }
+        }
+        if (Regex(
+                """\b(what('s| is) my (dog|cat|bird|fish|hamster|rabbit)'?s? name|what('s| is) my (dog|cat|bird|fish|hamster|rabbit) called)\b""",
+            ).containsMatchIn(lower)
+        ) {
+            val kind = Regex("""\b(dog|cat|bird|fish|hamster|rabbit)\b""").find(lower)?.value ?: return null
+            val pet = notes["pet-$kind"]?.value
+            return if (pet.isNullOrBlank()) {
+                SpokenReply("I don't know your $kind's name yet.", Emotion.CURIOUS)
+            } else {
+                SpokenReply("Your $kind is $pet.", Emotion.HAPPY)
             }
         }
         if (Regex(
@@ -132,58 +154,144 @@ class AudienceKb(
         if (maintain()) persist()
     }
 
-    private fun absorb(user: String): Boolean {
-        val lower = user.lowercase()
-        var changed = false
+    private fun absorb(user: String): List<KbChange> {
+        val lower = stripLeadIn(user.lowercase())
+        val changes = mutableListOf<KbChange>()
         val now = clockMs()
-        explicitName(lower)?.let {
-            putPinned("name", it, now)
-            changed = true
-        }
+
+        explicitName(lower)?.let { changes += putPinned("name", it, now) }
+        correctionName(lower)?.let { changes += putPinned("name", it, now) }
+
         LIKE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let {
-            putPinned("likes", it, now)
-            changed = true
+            changes += putPinned("likes", it, now)
         }
         FAVORITE.find(lower)?.groupValues?.let { groups ->
             val kind = groups.getOrNull(1)?.trim().orEmpty()
+                .replace(Regex("""\s+"""), "-")
             val value = groups.getOrNull(2)?.trim().orEmpty()
             if (kind.isNotEmpty() && value.length in 2..80) {
-                putFact("favorite $kind is $value", now)
-                changed = true
+                changes += putPinned("favorite-$kind", value, now)
             }
         }
         PLACE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let {
-            putPinned("from", it, now)
-            changed = true
+            changes += putPinned("from", it, now)
         }
-        HAVE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let { thing ->
-            putFact("has $thing", now)
-            changed = true
+
+        petName(lower)?.let { (kind, name) ->
+            changes += putPinned("pet-$kind", name, now)
         }
+
+        // Generic "I have a …" only when it is not already captured as a named pet.
+        if (petName(lower) == null) {
+            HAVE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let { thing ->
+                changes += putAppendFact("has $thing", now)
+            }
+        }
+
         REMEMBER.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..120 }?.let { fact ->
-            putFact(fact, now)
-            changed = true
+            // Prefer structured pet capture inside "remember that my dog is named X".
+            val nested = petName(fact) ?: petName("my $fact")
+            if (nested != null) {
+                changes += putPinned("pet-${nested.first}", nested.second, now)
+            } else {
+                changes += putAppendFact(fact, now)
+            }
         }
-        return changed
+        return changes.distinctBy { it.key to it.value }
     }
 
     private fun explicitName(lower: String): String? {
         val raw = NAME_EXPLICIT.find(lower)?.groupValues?.getOrNull(1)
             ?: NAME_IAM.find(lower)?.groupValues?.getOrNull(1)
             ?: return null
-        val cleaned = raw.trim()
+        return titleName(raw)
+    }
+
+    /** "not Gia, it's Jia" / "not Gia it is Jia" when correcting a mis-heard name. */
+    private fun correctionName(lower: String): String? {
+        val groups = NAME_CORRECTION.find(lower)?.groupValues ?: return null
+        val wrong = titleName(groups.getOrNull(1) ?: return null) ?: return null
+        val right = titleName(groups.getOrNull(2) ?: return null) ?: return null
+        val current = notes["name"]?.value
+        // Prefer this when it matches a stored wrong name, or when no name is stored yet
+        // but the utterance is clearly a not-X-it's-Y correction.
+        if (current != null && !current.equals(wrong, ignoreCase = true) &&
+            !current.equals(right, ignoreCase = true)
+        ) {
+            return null
+        }
+        return right
+    }
+
+    private fun petName(lower: String): Pair<String, String>? {
+        PET_NAME_IS.find(lower)?.groupValues?.let { groups ->
+            val kind = groups.getOrNull(1)?.trim().orEmpty()
+            val name = titleName(groups.getOrNull(2).orEmpty())
+            if (kind in PET_KINDS && name != null) return kind to name
+        }
+        PET_NAMED.find(lower)?.groupValues?.let { groups ->
+            val kind = groups.getOrNull(1)?.trim().orEmpty()
+            val name = titleName(groups.getOrNull(2).orEmpty())
+            if (kind in PET_KINDS && name != null) return kind to name
+        }
+        HAVE_PET.find(lower)?.groupValues?.let { groups ->
+            val kind = groups.getOrNull(1)?.trim().orEmpty()
+            val name = titleName(groups.getOrNull(2).orEmpty())
+            if (kind in PET_KINDS && name != null) return kind to name
+        }
+        return null
+    }
+
+    private fun titleName(raw: String): String? {
+        val cleaned = raw.trim().trimEnd('.', '!', '?', ',')
         if (cleaned.isEmpty() || cleaned in NAME_STOP) return null
         return cleaned.split(Regex("""\s+"""))
             .joinToString(" ") { part -> part.replaceFirstChar { ch -> ch.titlecase() } }
     }
 
-    private fun putPinned(key: String, value: String, now: Long) {
+    private fun putPinned(key: String, value: String, now: Long): KbChange {
+        val previous = notes[key]?.value
+        if (previous != null && !previous.equals(value, ignoreCase = true)) {
+            scrubMention(previous)
+        }
         notes[key] = Note(key, value, now, pinned = true)
+        return KbChange(key, previous, value)
     }
 
-    private fun putFact(value: String, now: Long) {
+    private fun putAppendFact(value: String, now: Long): KbChange {
+        // Replace an identical freeform fact instead of duplicating it.
+        val existing = notes.entries.firstOrNull {
+            it.key.startsWith("fact-") && it.value.value.equals(value, ignoreCase = true)
+        }
+        if (existing != null) {
+            notes[existing.key] = Note(existing.key, value, now, pinned = false)
+            return KbChange(existing.key, existing.value.value, value)
+        }
         val key = nextFactKey()
         notes[key] = Note(key, value, now, pinned = false)
+        return KbChange(key, null, value)
+    }
+
+    /** Drop or rewrite older notes that still carry a superseded value. */
+    private fun scrubMention(old: String) {
+        val pattern = Regex("""\b${Regex.escape(old)}\b""", RegexOption.IGNORE_CASE)
+        val staleKeys = mutableListOf<String>()
+        for ((key, note) in notes) {
+            if (key == "name" || key.startsWith("pet-") || key.startsWith("favorite-")) continue
+            if (!pattern.containsMatchIn(note.value)) continue
+            if (key == "summary") {
+                val cleaned = pattern.replace(note.value, "")
+                    .replace(Regex("""\s*;\s*;\s*"""), "; ")
+                    .replace(Regex("""^;\s*|\s*;$"""), "")
+                    .replace(Regex("""\s+"""), " ")
+                    .trim()
+                if (cleaned.isEmpty()) staleKeys += key
+                else notes[key] = note.copy(value = cleaned)
+            } else if (key.startsWith("fact-")) {
+                staleKeys += key
+            }
+        }
+        staleKeys.forEach { notes.remove(it) }
     }
 
     /** @return true if notes changed. */
@@ -225,10 +333,13 @@ class AudienceKb(
     private fun orderedNotes(): List<Note> {
         val pinnedOrder = listOf("name", "likes", "from", "summary")
         val pinned = pinnedOrder.mapNotNull { notes[it] }
+        val structured = notes.values
+            .filter { it.pinned && it.key !in pinnedOrder }
+            .sortedBy { it.key }
         val facts = notes.values
             .filter { !it.pinned && it.key.startsWith("fact-") }
             .sortedBy { it.updatedAtMs }
-        return pinned + facts
+        return pinned + structured + facts
     }
 
     private fun nextFactKey(): String {
@@ -287,19 +398,36 @@ class AudienceKb(
         val pinned: Boolean,
     )
 
+    data class KbChange(val key: String, val previous: String?, val value: String)
+
     private companion object {
         const val MAX_FACTS = 16
         const val FACT_TTL_MS = 30L * 24 * 60 * 60 * 1000
         const val SUMMARY_MAX_CHARS = 400
         val PINNED_KEYS = setOf("name", "likes", "from", "summary")
+        val PET_KINDS = setOf("dog", "cat", "bird", "fish", "hamster", "rabbit")
 
-        fun isPinnedKey(key: String) = key in PINNED_KEYS
+        fun isPinnedKey(key: String) =
+            key in PINNED_KEYS || key.startsWith("pet-") || key.startsWith("favorite-")
+
+        fun stripLeadIn(lower: String): String {
+            var s = lower.trim()
+            val lead = Regex("""^(?:actually|no|nope|wait|sorry|correction|oh|um|uh)[,!]?\s+""")
+            while (true) {
+                val next = lead.replace(s, "")
+                if (next == s) return s
+                s = next.trim()
+            }
+        }
 
         val NAME_EXPLICIT = Regex(
             """(?:my name is|call me)\s+([a-z][a-z'’-]*(?:\s+[a-z][a-z'’-]*)?)""",
         )
         val NAME_IAM = Regex(
             """(?:i am|i'm)\s+([a-z][a-z'’-]*)\b""",
+        )
+        val NAME_CORRECTION = Regex(
+            """\bnot\s+([a-z][a-z'’-]*)[,.]?\s+(?:it'?s|it is|but)\s+([a-z][a-z'’-]*)\b""",
         )
         val NAME_STOP = setOf(
             "a", "an", "the", "here", "ready", "fine", "good", "okay", "ok", "sorry",
@@ -312,6 +440,15 @@ class AudienceKb(
         )
         val PLACE = Regex("""(?:i live in|i'm from|i am from)\s+(.+?)(?:[.!?]|$)""")
         val HAVE = Regex("""(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!?]|$)""")
+        val HAVE_PET = Regex(
+            """(?:i have|i've got)\s+(?:a|an)\s+(dog|cat|bird|fish|hamster|rabbit)\s+(?:named|called)\s+([a-z][a-z'’-]*)""",
+        )
+        val PET_NAME_IS = Regex(
+            """(?:my\s+)?(dog|cat|bird|fish|hamster|rabbit)'?s?\s+name\s+is\s+([a-z][a-z'’-]*)""",
+        )
+        val PET_NAMED = Regex(
+            """(?:my\s+)?(dog|cat|bird|fish|hamster|rabbit)\s+is\s+(?:named|called)\s+([a-z][a-z'’-]*)""",
+        )
         val REMEMBER = Regex("""(?:remember(?: that)?|don't forget(?: that)?)\s+(.+?)(?:[.!?]|$)""")
     }
 }

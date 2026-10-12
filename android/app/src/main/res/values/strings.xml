@@ -31,7 +31,7 @@
     <string name="debug_mode">Debug</string>
     <string name="manual_mode">Manual</string>
     <string name="manual_title">Manual</string>
-    <string name="manual_subtitle">Hold until Stop</string>
+    <string name="manual_subtitle">Hold until Stop. Search looks left, right, then backs up.</string>
     <string name="manual_forward">Fwd</string>
     <string name="manual_slow_forward">Slow+</string>
     <string name="manual_backward">Back</string>

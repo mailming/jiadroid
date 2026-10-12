@@ -42,6 +42,20 @@ class TalkMemoryTest {
         assertEquals("user 3", turns.first().text)
         assertEquals("bot 4", turns.last().text)
     }
+
+    @Test
+    fun rewritesMisheardMentionsInRecentTurns() {
+        val memory = TalkMemory()
+        memory.rememberExchange("My name is Gia", "Nice to meet you Gia.")
+        memory.rememberExchange("I have a dog named Body", "Cute dog.")
+        memory.rewriteMention("Gia", "Jia")
+        memory.rewriteMention("Body", "Buddy")
+        val text = memory.chatTurns().joinToString(" ") { it.text }
+        assertTrue(text.contains("Jia"))
+        assertTrue(text.contains("Buddy"))
+        assertFalse(text.contains("Gia"))
+        assertFalse(text.contains("Body"))
+    }
 }
 
 class AudienceKbTest {
@@ -74,9 +88,42 @@ class AudienceKbTest {
         kb.rememberFrom("I have a dog named Spot")
         kb.rememberFrom("My name is Jia")
         val block = kb.promptBlock()
-        assertTrue(block.contains("favorite color is blue"))
-        assertTrue(block.contains("dog named spot"))
+        assertTrue(block.contains("favorite-color: blue"))
+        assertTrue(block.contains("pet-dog: Spot"))
         assertEquals("You're Jia.", kb.recallReply("do you remember my name")!!.say)
+        assertEquals("Your dog is Spot.", kb.recallReply("what's my dog's name")!!.say)
+    }
+
+    @Test
+    fun replacesWrongNameAndDogInsteadOfStacking() {
+        var stored: String? = null
+        val kb = AudienceKb(loadJson = { stored }, saveJson = { stored = it })
+        kb.rememberFrom("My name is Gia")
+        kb.rememberFrom("I have a dog named Body")
+        val nameFix = kb.rememberFrom("Actually my name is Jia")
+        val dogFix = kb.rememberFrom("No, my dog's name is Buddy")
+        assertEquals("name", nameFix.single().key)
+        assertEquals("Gia", nameFix.single().previous)
+        assertEquals("Jia", nameFix.single().value)
+        assertEquals("pet-dog", dogFix.single().key)
+        assertEquals("Body", dogFix.single().previous)
+        assertEquals("Buddy", dogFix.single().value)
+        val block = kb.promptBlock()
+        assertTrue(block.contains("name: Jia"))
+        assertTrue(block.contains("pet-dog: Buddy"))
+        assertFalse(block.contains("Gia"))
+        assertFalse(block.contains("Body"))
+        assertEquals("You're Jia.", kb.recallReply("what's my name")!!.say)
+        assertEquals("Your dog is Buddy.", kb.recallReply("what's my dog called")!!.say)
+    }
+
+    @Test
+    fun acceptsNotXItsYNameCorrection() {
+        var stored: String? = null
+        val kb = AudienceKb(loadJson = { stored }, saveJson = { stored = it })
+        kb.rememberFrom("My name is Gia")
+        kb.rememberFrom("Not Gia, it's Jia")
+        assertEquals("You're Jia.", kb.recallReply("what's my name")!!.say)
     }
 
     @Test

@@ -49,8 +49,11 @@ func reply(
     if lower.range(of: #"\b(sad|sorry|hurt|scared)\b"#, options: .regularExpression) != nil {
         return SpokenReply(say: "I'm right here with you. Want to tell me about it?", emotion: .sad)
     }
-    if lower.range(of: #"(?:my name is|i am|i'm|call me)\s+\w+"#, options: .regularExpression) != nil {
-        return SpokenReply(say: "Got it! I'll remember that on this phone.", emotion: .happy)
+    if lower.range(
+        of: #"(?:my name is|i am|i'm|call me)\s+\w+|not\s+\w+[,.]?\s+(?:it'?s|it is)\s+\w+|(?:dog|cat)'?s?\s+name\s+is\s+\w+|(?:dog|cat)\s+is\s+(?:named|called)\s+\w+"#,
+        options: .regularExpression
+    ) != nil {
+        return SpokenReply(say: "Got it! I'll update what I remember on this phone.", emotion: .happy)
     }
     if lower.range(of: #"(?:remember(?: that)?|don't forget)\b"#, options: .regularExpression) != nil {
         return SpokenReply(say: "Okay, locking that into my memory vault.", emotion: .happy)

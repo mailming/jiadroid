@@ -47,7 +47,8 @@ These GPIO numbers are pins that are actually on the DevKitC-1 headers. GPIO 19 
 Share one ground between the ESP32, the L9110S, and the encoder plugs. Power the motors from the AA pack through the L9110S. Do not power the motors from the ESP32's 3.3 V pin.
 
 The L9110S inputs take a 3.3 V GPIO. Power the encoder boards from the ESP32's 3.3 V pin. A 5 V encoder output into a GPIO can damage the chip. Motor PWM is 1 kHz (some L9110S boards only hiss and barely move at 20 kHz).
-Non-zero wheel commands also use at least `MIN_MOTOR_DUTY` (~50% PWM) so in-place yaw and slow crawl can overcome stall instead of only beeping.
+Non-zero wheel commands boost PWM for stall, but same-direction left/right pairs are scaled together so yaw keeps a speed difference (a flat min on both sides looked like driving straight).
+Leaving a full stop applies a short scaled `MOTOR_KICK_DUTY` pulse so Slow+ can break static friction.
 
 | ESP32-S3 | Connects to |
 | --- | --- |

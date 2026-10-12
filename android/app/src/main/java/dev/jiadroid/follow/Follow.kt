@@ -157,10 +157,10 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
     if (scene.distance < CLOSE_M) return stopped("$subject is too close")
     val headYaw = scene.angle.coerceIn(-0.5f, 0.5f)
     if (scene.angle < -ALIGN_RAD) {
-        return FollowDecision("$subject is left", "TURN LEFT", 0.10f, 0f, 0.40f, headYaw)
+        return FollowDecision("$subject is left", "TURN LEFT", 0.07f, 0f, 0.85f, headYaw)
     }
     if (scene.angle > ALIGN_RAD) {
-        return FollowDecision("$subject is right", "TURN RIGHT", 0.10f, 0f, -0.40f, headYaw)
+        return FollowDecision("$subject is right", "TURN RIGHT", 0.07f, 0f, -0.85f, headYaw)
     }
     if (scene.distance > FAR_M) {
         return FollowDecision("$subject is too far", "FORWARD", 0.12f, 0f, 0f, headYaw)
@@ -172,14 +172,16 @@ fun decide(scene: Scene, subject: String = "Marker"): FollowDecision {
 }
 
 /**
- * When the target disappears, wait briefly then gently yaw left/right to reacquire
- * instead of sitting on STOP. Cancels immediately when the person is seen again.
+ * When the target disappears, wait briefly then scan: look left, look right,
+ * ease backward, repeat — so the camera can catch the person again. Cancels
+ * as soon as they are visible.
  */
 class LostSearch(
     private val graceMs: Long = 400L,
     private val maxSearchMs: Long = 8_000L,
-    private val sliceMs: Long = 1_200L,
-    private val searchYaw: Float = 0.65f,
+    private val sliceMs: Long = 900L,
+    private val searchYaw: Float = 0.70f,
+    private val searchBackup: Float = -0.08f,
 ) {
     private var lostSinceMs: Long? = null
     var searching: Boolean = false
@@ -188,6 +190,12 @@ class LostSearch(
     fun clear() {
         lostSinceMs = null
         searching = false
+    }
+
+    /** Start scanning immediately (manual Search pad), skipping the grace wait. */
+    fun begin(nowMs: Long) {
+        lostSinceMs = nowMs - graceMs
+        searching = true
     }
 
     fun enrich(scene: Scene, follow: FollowDecision, nowMs: Long, subject: String): FollowDecision {
@@ -202,16 +210,33 @@ class LostSearch(
             return follow
         }
         searching = true
-        val left = ((lostFor / sliceMs) % 2L) == 0L
-        val yaw = if (left) searchYaw else -searchYaw
-        return FollowDecision(
-            "$subject is lost — looking",
-            "SEARCH",
-            0.10f,
-            0f,
-            yaw,
-            yaw.coerceIn(-0.5f, 0.5f),
-        )
+        val phase = ((lostFor - graceMs) / sliceMs % 3L).toInt()
+        return when (phase) {
+            0 -> FollowDecision(
+                "$subject is lost — looking left",
+                "SEARCH",
+                0f,
+                0f,
+                searchYaw,
+                searchYaw.coerceIn(-0.5f, 0.5f),
+            )
+            1 -> FollowDecision(
+                "$subject is lost — looking right",
+                "SEARCH",
+                0f,
+                0f,
+                -searchYaw,
+                (-searchYaw).coerceIn(-0.5f, 0.5f),
+            )
+            else -> FollowDecision(
+                "$subject is lost — backing up",
+                "SEARCH",
+                searchBackup,
+                0f,
+                0f,
+                0f,
+            )
+        }
     }
 }
 

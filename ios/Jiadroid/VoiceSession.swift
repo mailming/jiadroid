@@ -88,12 +88,19 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     /// Answers [heard]. Mic lines need the robot's name once to open a short conversation window;
     /// later turns keep going until ~30s of silence. Typed Debug lines pass `requireName: false`.
     func answer(_ heard: String, requireName: Bool = true) {
-        if speaking { return }
-        if Date() < ignoreHearUntil { return }
         if isNoise(heard) { return }
         if isEchoOfSelf(heard) { return }
+        let now = Date()
         let name = normalizeRobotName(robotName)
-        let gate = attention.consider(heard: heard, name: name, requireName: requireName)
+        let wake = parseAttention(heard: heard, name: name)
+        if speaking {
+            if wake.addressed { bargeIn() } else { return }
+        }
+        if now < ignoreHearUntil {
+            let keep = !requireName || wake.addressed || attention.isEngaged(now: now)
+            if !keep { return }
+        }
+        let gate = attention.consider(heard: heard, name: name, requireName: requireName, now: now)
         guard gate.addressed else { return }
         // New wake after the hold expired: clear short-term chat only. AudienceKb
         // (name / likes / facts) stays on disk and is reloaded for this conversation.
@@ -108,12 +115,23 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             speak(SpokenReply(say: "Yes?", emotion: .curious), rememberUser: nil, userAlreadyStaged: false)
             return
         }
+        // Motion commands move the body immediately and skip the chat model.
         if let action = parseVoiceAction(gate.utterance) {
             onAction(action)
             onTurn("Action", action.description)
+            speaking = true
+            closeMic()
+            attention.keepAlive(now: Date())
+            speak(
+                SpokenReply(say: action.spokenAck, emotion: .excited),
+                rememberUser: gate.utterance,
+                userAlreadyStaged: false
+            )
+            return
         }
         speaking = true
         closeMic()
+        attention.keepAlive(now: Date())
         let seen = seeing()
         let request = gate.utterance
         // Recall before staging this turn so "what did I just say" still sees the prior line.
@@ -122,15 +140,16 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             return
         }
         // Absorb facts and stage this user line BEFORE the model runs.
-        kb.rememberFrom(request)
-        memory.rememberUser(request)
+        // Corrections also rewrite mis-heard names already sitting in TalkMemory.
+        absorbIntoMemory(request)
         guard let brain else {
             let spoken = reply(heard: request, seeing: seen, name: name, memory: memory, kb: kb)
             speak(spoken, rememberUser: request, userAlreadyStaged: true)
             return
         }
         onEmotion(.thinking)
-        onLine("Thinking")
+        onLine("Thinking…")
+        reopenForBargeInSoon()
         thinker.async { [weak self] in
             guard let self else { return }
             let spoken: SpokenReply
@@ -147,17 +166,24 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                 spoken = reply(heard: request, seeing: seen, name: name, memory: self.memory, kb: self.kb)
             }
             DispatchQueue.main.async {
+                self.attention.keepAlive()
                 self.speak(spoken, rememberUser: request, userAlreadyStaged: true)
             }
         }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in self?.resume() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.speaking else { return }
+            self.resume()
+        }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in self?.resume() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.speaking else { return }
+            self.resume()
+        }
     }
 
     private func requestAccessThenListen() {
@@ -183,7 +209,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func listen() {
-        if !alive || speaking { return }
+        if !alive { return }
         micLock.lock()
         defer { micLock.unlock() }
         if audioEngine.isRunning { return }
@@ -226,8 +252,10 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             if reportedDrop {
                 reportedDrop = false
             }
-            onEmotion(.listening)
-            onLine("Listening")
+            if !speaking {
+                onEmotion(.listening)
+                onLine("Listening")
+            }
             scheduleRestart()
         } catch {
             recognitionTask?.cancel()
@@ -244,22 +272,41 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
-        if !alive || speaking { return }
+        if !alive { return }
         if let result {
             let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
+                if speaking && parseAttention(heard: text, name: robotName).addressed {
+                    bargeIn()
+                }
                 if result.isFinal {
+                    let wasSpeaking = speaking
                     answer(text)
+                    // Final results end the Apple task; reopen for idle listen or barge-in.
+                    if alive && (!speaking || wasSpeaking) {
+                        scheduleRetry()
+                    }
                     return
                 }
-                onEmotion(.listening)
-                onHearing(text)
+                if !speaking {
+                    onEmotion(.listening)
+                    onHearing(text)
+                }
             }
         }
         if error != nil {
             noteDrop()
             closeMic()
-            if alive && !speaking { scheduleRetry() }
+            if alive { scheduleRetry() }
+        }
+    }
+
+    private func absorbIntoMemory(_ request: String) {
+        let changes = kb.rememberFrom(request)
+        memory.rememberUser(request)
+        for change in changes {
+            guard let previous = change.previous else { continue }
+            memory.rewriteMention(from: previous, to: change.value)
         }
     }
 
@@ -268,8 +315,8 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             if userAlreadyStaged {
                 memory.rememberAssistant(spoken.say)
             } else {
-                kb.rememberFrom(rememberUser)
-                memory.rememberExchange(user: rememberUser, assistant: spoken.say)
+                absorbIntoMemory(rememberUser)
+                memory.rememberAssistant(spoken.say)
             }
         }
         closeMic()
@@ -283,7 +330,8 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         synthesizer.speak(utterance)
-        // Safety valve: stop TTS then cool down — never open the mic while still talking.
+        reopenForBargeInSoon()
+        // Safety valve: stop TTS then cool down.
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.speakLimitSeconds) { [weak self] in
             guard let self, self.speaking, self.speakGeneration == generation else { return }
             self.synthesizer.stopSpeaking(at: .immediate)
@@ -291,11 +339,28 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
+    private func bargeIn() {
+        speakGeneration += 1
+        synthesizer.stopSpeaking(at: .immediate)
+        speaking = false
+        ignoreHearUntil = .distantPast
+        onLine("Listening")
+    }
+
+    private func reopenForBargeInSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self, self.alive, self.speaking else { return }
+            self.listen()
+        }
+    }
+
     private func resume() {
         speaking = false
         speakGeneration += 1
+        let now = Date()
+        if attention.isEngaged(now: now) { attention.keepAlive(now: now) }
         // Room echo of our own TTS often lands right after playback ends.
-        ignoreHearUntil = Date().addingTimeInterval(Self.echoCooldownSeconds)
+        ignoreHearUntil = now.addingTimeInterval(Self.echoCooldownSeconds)
         if !alive { return }
         onEmotion(.listening)
         onLine("Listening")
@@ -332,7 +397,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private func scheduleRetry() {
         restartWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.alive, !self.speaking else { return }
+            guard let self, self.alive else { return }
             self.listen()
         }
         restartWork = work
@@ -342,7 +407,7 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private func scheduleRestart() {
         restartWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.alive, !self.speaking else { return }
+            guard let self, self.alive else { return }
             self.closeMic()
             self.listen()
         }
@@ -377,6 +442,6 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private static let speakLimitSeconds: TimeInterval = 10
-    private static let echoCooldownSeconds: TimeInterval = 0.8
+    private static let echoCooldownSeconds: TimeInterval = 0.45
     private static let noise: Set<String> = ["huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an"]
 }

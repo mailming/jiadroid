@@ -18,8 +18,12 @@ constexpr int TICKS_PER_REV = ENCODER_SLOTS * GEAR_RATIO;
 constexpr double MAX_FORWARD_M_S = 0.40;
 constexpr double MAX_YAW_RAD_S = 1.5;
 constexpr double MAX_WHEEL_RAD_S = MAX_FORWARD_M_S / WHEEL_RADIUS_M;
-// L9110S + these gearmotors stall/beep below ~50% PWM (in-place yaw, slow crawl).
-constexpr int MIN_MOTOR_DUTY = 130;
+// Floor for a lone slow wheel. Same-direction L/R pairs scale together so a
+// turn keeps a speed difference (a flat min on both sides looked like "both forward").
+constexpr int MIN_MOTOR_DUTY = 120;
+// Breakaway when leaving a full stop. Scaled across both wheels to keep yaw.
+constexpr int MOTOR_KICK_DUTY = 230;
+constexpr unsigned long MOTOR_KICK_MS = 250;
 constexpr double RANGE_MAX_M = 2.0;
 
 // Phone standing on the top plate. Matches the `top` mount in the simulator.

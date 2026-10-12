@@ -301,14 +301,19 @@ final class FollowSession: ObservableObject, CameraSink {
         if action.motion == .follow {
             voiceDecision = nil
             voiceActionUntil = .distantPast
-        } else {
-            lostSearch.clear()
-            voiceDecision = action.decision()
-            voiceActionUntil = action.durationMs > 0
-                ? Date().addingTimeInterval(action.durationMs)
-                : .distantFuture
+            lastCommandKey = nil
+            send(FollowDecision(situation: "Voice command: follow", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0), force: true)
+            return
         }
+        lostSearch.clear()
+        let decision = action.decision()
+        voiceDecision = decision
+        voiceActionUntil = action.durationMs > 0
+            ? Date().addingTimeInterval(action.durationMs)
+            : .distantFuture
         lastCommandKey = nil
+        // Same path as the Debug pad: push to the body immediately.
+        send(decision, force: true)
     }
 
     private func currentDecision(_ follow: FollowDecision, now: Date) -> FollowDecision {

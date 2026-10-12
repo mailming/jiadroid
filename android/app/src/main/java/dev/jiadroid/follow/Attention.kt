@@ -53,6 +53,17 @@ class AttentionSession(private val holdMs: Long = ATTENTION_HOLD_MS) {
         engagedUntilMs = 0L
     }
 
+    /** True while follow-ups without the wake name still count. */
+    fun isEngaged(nowMs: Long): Boolean = nowMs < engagedUntilMs
+
+    /**
+     * Refresh the conversation window (e.g. while thinking / talking) so a slow
+     * reply does not force the user to say the wake name again.
+     */
+    fun keepAlive(nowMs: Long) {
+        touch(nowMs)
+    }
+
     fun consider(heard: String, name: String, requireName: Boolean, nowMs: Long): Attention {
         val said = heard.trim().replace(Regex("""\s+"""), " ")
         if (!requireName) {

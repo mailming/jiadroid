@@ -42,6 +42,25 @@ class TalkMemory(
         messages.clear()
     }
 
+    /**
+     * After the audience KB corrects a mis-heard name/fact, rewrite that word in
+     * recent turns so the model is not pulled back to the wrong value.
+     */
+    @Synchronized
+    fun rewriteMention(from: String, to: String) {
+        val src = from.trim()
+        val dst = to.trim()
+        if (src.isEmpty() || dst.isEmpty() || src.equals(dst, ignoreCase = true)) return
+        val pattern = Regex("""\b${Regex.escape(src)}\b""", RegexOption.IGNORE_CASE)
+        if (messages.none { pattern.containsMatchIn(it.text) }) return
+        val rewritten = ArrayDeque<TalkTurn>()
+        for (turn in messages) {
+            rewritten.addLast(TalkTurn(turn.role, pattern.replace(turn.text, dst)))
+        }
+        messages.clear()
+        messages.addAll(rewritten)
+    }
+
     /** Compact recent-talk block for the model system prompt. */
     @Synchronized
     fun contextBlock(): String {

@@ -66,6 +66,19 @@ final class AttentionSession {
         lock.unlock()
     }
 
+    /// True while follow-ups without the wake name still count.
+    func isEngaged(now: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return now < engagedUntil
+    }
+
+    /// Refresh the conversation window (e.g. while thinking / talking) so a slow
+    /// reply does not force the user to say the wake name again.
+    func keepAlive(now: Date = Date()) {
+        touch(now)
+    }
+
     func consider(heard: String, name: String, requireName: Bool, now: Date = Date()) -> Attention {
         let said = heard.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)

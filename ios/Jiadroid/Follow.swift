@@ -134,10 +134,10 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
     if scene.angle < -alignRad {
-        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.10, lateral: 0, yaw: 0.40, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.85, headYaw: headYaw)
     }
     if scene.angle > alignRad {
-        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.10, lateral: 0, yaw: -0.40, headYaw: headYaw)
+        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.85, headYaw: headYaw)
     }
     if scene.distance > farM {
         return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.12, lateral: 0, yaw: 0, headYaw: headYaw)
@@ -148,26 +148,29 @@ func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.08, lateral: 0, yaw: 0, headYaw: headYaw)
 }
 
-/// When the target disappears, wait briefly then gently yaw left/right to reacquire
-/// instead of sitting on STOP. Cancels immediately when the person is seen again.
+/// When the target disappears, wait briefly then scan left, right, and reverse
+/// to reacquire. Cancels immediately when the person is seen again.
 final class LostSearch {
     private let grace: TimeInterval
     private let maxSearch: TimeInterval
     private let slice: TimeInterval
     private let searchYaw: Float
+    private let searchBackup: Float
     private var lostSince: Date?
     private(set) var searching = false
 
     init(
         grace: TimeInterval = 0.4,
         maxSearch: TimeInterval = 8,
-        slice: TimeInterval = 1.2,
-        searchYaw: Float = 0.65
+        slice: TimeInterval = 0.9,
+        searchYaw: Float = 0.70,
+        searchBackup: Float = -0.08
     ) {
         self.grace = grace
         self.maxSearch = maxSearch
         self.slice = slice
         self.searchYaw = searchYaw
+        self.searchBackup = searchBackup
     }
 
     func clear() {
@@ -187,16 +190,36 @@ final class LostSearch {
             return follow
         }
         searching = true
-        let left = Int(lostFor / slice) % 2 == 0
-        let yaw = left ? searchYaw : -searchYaw
-        return FollowDecision(
-            situation: "\(subject) is lost — looking",
-            command: "SEARCH",
-            forward: 0.10,
-            lateral: 0,
-            yaw: yaw,
-            headYaw: min(0.5, max(-0.5, yaw))
-        )
+        let phase = Int((lostFor - grace) / slice) % 3
+        switch phase {
+        case 0:
+            return FollowDecision(
+                situation: "\(subject) is lost — looking left",
+                command: "SEARCH",
+                forward: 0,
+                lateral: 0,
+                yaw: searchYaw,
+                headYaw: min(0.5, max(-0.5, searchYaw))
+            )
+        case 1:
+            return FollowDecision(
+                situation: "\(subject) is lost — looking right",
+                command: "SEARCH",
+                forward: 0,
+                lateral: 0,
+                yaw: -searchYaw,
+                headYaw: min(0.5, max(-0.5, -searchYaw))
+            )
+        default:
+            return FollowDecision(
+                situation: "\(subject) is lost — backing up",
+                command: "SEARCH",
+                forward: searchBackup,
+                lateral: 0,
+                yaw: 0,
+                headYaw: 0
+            )
+        }
     }
 }
 

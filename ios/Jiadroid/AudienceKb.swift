@@ -5,11 +5,20 @@ import Foundation
 /// Survives wake-window expiry, new conversations, and app restarts. Only short-term
 /// `TalkMemory` resets when a new wake opens after silence.
 ///
-/// - **Pin:** `name`, `likes`, `from`, and compacted `summary` never expire or get FIFO'd.
+/// - **Pin:** `name`, `likes`, `from`, pet / favorite keys, and compacted `summary`
+///   never expire or get FIFO'd.
+/// - **Replace:** repeating “my name is…”, “my dog’s name is…”, or “actually…” updates
+///   the same key instead of stacking conflicting notes.
 /// - **Cap:** at most `maxFacts` freeform `fact-*` notes.
 /// - **TTL:** freeform facts older than `factTtl` are dropped (default 30 days).
 /// - **Compact:** when over the fact cap, oldest facts fold into `summary`.
 final class AudienceKb {
+    struct KbChange {
+        let key: String
+        let previous: String?
+        let value: String
+    }
+
     private struct Note: Equatable {
         var key: String
         var value: String
@@ -99,15 +108,21 @@ final class AudienceKb {
         persistLocked()
     }
 
-    func rememberFrom(_ user: String) {
+    /// Absorb durable facts from one user line.
+    /// - Returns: keys that changed (with prior value when replacing), so `TalkMemory`
+    ///   can rewrite mis-heard mentions in the live chat window.
+    @discardableResult
+    func rememberFrom(_ user: String) -> [KbChange] {
         let said = user.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        if said.isEmpty { return }
+        if said.isEmpty { return [] }
         lock.lock()
         defer { lock.unlock() }
-        guard absorb(said) else { return }
+        let changes = absorb(said)
+        guard !changes.isEmpty else { return [] }
         _ = maintainLocked()
         persistLocked()
+        return changes
     }
 
     func clear() {
@@ -140,6 +155,20 @@ final class AudienceKb {
                 return SpokenReply(say: "You're \(name).", emotion: .happy)
             }
             return SpokenReply(say: "I don't know your name yet. Tell me, and I'll remember.", emotion: .curious)
+        }
+        if lower.range(
+            of: #"\b(what('s| is) my (dog|cat|bird|fish|hamster|rabbit)'?s? name|what('s| is) my (dog|cat|bird|fish|hamster|rabbit) called)\b"#,
+            options: .regularExpression
+        ) != nil {
+            guard let kindRange = lower.range(
+                of: #"\b(dog|cat|bird|fish|hamster|rabbit)\b"#,
+                options: .regularExpression
+            ) else { return nil }
+            let kind = String(lower[kindRange])
+            if let pet = notes["pet-\(kind)"]?.value, !pet.isEmpty {
+                return SpokenReply(say: "Your \(kind) is \(pet).", emotion: .happy)
+            }
+            return SpokenReply(say: "I don't know your \(kind)'s name yet.", emotion: .curious)
         }
         if lower.range(
             of: #"\b(what do you remember|what do you know about me|what have i told you|do you remember (anything|me))\b"#,
@@ -180,20 +209,23 @@ final class AudienceKb {
         lock.unlock()
     }
 
-    private func absorb(_ user: String) -> Bool {
-        let lower = user.lowercased()
-        var changed = false
+    private func absorb(_ user: String) -> [KbChange] {
+        let lower = Self.stripLeadIn(user.lowercased())
+        var changes: [KbChange] = []
         let now = clock().timeIntervalSince1970
+
         if let name = explicitName(lower) {
-            putPinned(key: "name", value: name, at: now)
-            changed = true
+            changes.append(putPinned(key: "name", value: name, at: now))
         }
+        if let name = correctionName(lower) {
+            changes.append(putPinned(key: "name", value: name, at: now))
+        }
+
         if let match = firstMatch(lower, pattern: #"(?:i like|i love)\s+(.+?)(?:[.!]|$)"#),
            match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...80).contains(value.count) {
-                putPinned(key: "likes", value: value, at: now)
-                changed = true
+                changes.append(putPinned(key: "likes", value: value, at: now))
             }
         }
         if let match = firstMatch(
@@ -201,39 +233,52 @@ final class AudienceKb {
             pattern: #"(?:my favorite|my favourite)\s+([a-z][a-z\s]{0,24}?)\s+is\s+(.+?)(?:[.!]|$)"#
         ), match.count >= 3 {
             let kind = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\\s+", with: "-", options: .regularExpression)
             let value = match[2].trimmingCharacters(in: .whitespacesAndNewlines)
             if !kind.isEmpty && (2...80).contains(value.count) {
-                putFact("favorite \(kind) is \(value)", at: now)
-                changed = true
+                changes.append(putPinned(key: "favorite-\(kind)", value: value, at: now))
             }
         }
         if let match = firstMatch(lower, pattern: #"(?:i live in|i'm from|i am from)\s+(.+?)(?:[.!]|$)"#),
            match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...80).contains(value.count) {
-                putPinned(key: "from", value: value, at: now)
-                changed = true
+                changes.append(putPinned(key: "from", value: value, at: now))
             }
         }
-        if let match = firstMatch(lower, pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!]|$)"#),
-           match.count >= 2 {
+
+        let pet = petName(lower)
+        if let pet {
+            changes.append(putPinned(key: "pet-\(pet.kind)", value: pet.name, at: now))
+        } else if let match = firstMatch(lower, pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!]|$)"#),
+                  match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...80).contains(value.count) {
-                putFact("has \(value)", at: now)
-                changed = true
+                changes.append(putAppendFact("has \(value)", at: now))
             }
         }
+
         if let match = firstMatch(
             lower,
             pattern: #"(?:remember(?: that)?|don't forget(?: that)?)\s+(.+?)(?:[.!]|$)"#
         ), match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...120).contains(value.count) {
-                putFact(value, at: now)
-                changed = true
+                if let nested = petName(value) ?? petName("my \(value)") {
+                    changes.append(putPinned(key: "pet-\(nested.kind)", value: nested.name, at: now))
+                } else {
+                    changes.append(putAppendFact(value, at: now))
+                }
             }
         }
-        return changed
+
+        var seen = Set<String>()
+        return changes.filter { change in
+            let token = "\(change.key)|\(change.value)"
+            if seen.contains(token) { return false }
+            seen.insert(token)
+            return true
+        }
     }
 
     private func explicitName(_ lower: String) -> String? {
@@ -249,23 +294,110 @@ final class AudienceKb {
         } else {
             raw = nil
         }
+        return titleName(raw)
+    }
+
+    private func correctionName(_ lower: String) -> String? {
+        guard let match = firstMatch(
+            lower,
+            pattern: #"\bnot\s+([a-z][a-z'’-]*)[,.]?\s+(?:it'?s|it is|but)\s+([a-z][a-z'’-]*)\b"#
+        ), match.count >= 3,
+           let wrong = titleName(match[1]),
+           let right = titleName(match[2])
+        else { return nil }
+        if let current = notes["name"]?.value,
+           current.compare(wrong, options: .caseInsensitive) != .orderedSame,
+           current.compare(right, options: .caseInsensitive) != .orderedSame {
+            return nil
+        }
+        return right
+    }
+
+    private func petName(_ lower: String) -> (kind: String, name: String)? {
+        if let match = firstMatch(
+            lower,
+            pattern: #"(?:my\s+)?(dog|cat|bird|fish|hamster|rabbit)'?s?\s+name\s+is\s+([a-z][a-z'’-]*)"#
+        ), match.count >= 3, Self.petKinds.contains(match[1]), let name = titleName(match[2]) {
+            return (match[1], name)
+        }
+        if let match = firstMatch(
+            lower,
+            pattern: #"(?:my\s+)?(dog|cat|bird|fish|hamster|rabbit)\s+is\s+(?:named|called)\s+([a-z][a-z'’-]*)"#
+        ), match.count >= 3, Self.petKinds.contains(match[1]), let name = titleName(match[2]) {
+            return (match[1], name)
+        }
+        if let match = firstMatch(
+            lower,
+            pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(dog|cat|bird|fish|hamster|rabbit)\s+(?:named|called)\s+([a-z][a-z'’-]*)"#
+        ), match.count >= 3, Self.petKinds.contains(match[1]), let name = titleName(match[2]) {
+            return (match[1], name)
+        }
+        return nil
+    }
+
+    private func titleName(_ raw: String?) -> String? {
         guard var cleaned = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !cleaned.isEmpty else {
             return nil
         }
+        while let last = cleaned.last, ".,!?".contains(last) {
+            cleaned.removeLast()
+        }
         if Self.nameStop.contains(cleaned) { return nil }
-        cleaned = cleaned.split(whereSeparator: \.isWhitespace)
+        return cleaned.split(whereSeparator: \.isWhitespace)
             .map { $0.capitalized }
             .joined(separator: " ")
-        return cleaned
     }
 
-    private func putPinned(key: String, value: String, at now: TimeInterval) {
+    private func putPinned(key: String, value: String, at now: TimeInterval) -> KbChange {
+        let previous = notes[key]?.value
+        if let previous, previous.compare(value, options: .caseInsensitive) != .orderedSame {
+            scrubMention(previous)
+        }
         notes[key] = Note(key: key, value: value, updatedAt: now, pinned: true)
+        return KbChange(key: key, previous: previous, value: value)
     }
 
-    private func putFact(_ value: String, at now: TimeInterval) {
+    private func putAppendFact(_ value: String, at now: TimeInterval) -> KbChange {
+        if let existing = notes.first(where: {
+            $0.key.hasPrefix("fact-") && $0.value.value.compare(value, options: .caseInsensitive) == .orderedSame
+        }) {
+            notes[existing.key] = Note(key: existing.key, value: value, updatedAt: now, pinned: false)
+            return KbChange(key: existing.key, previous: existing.value.value, value: value)
+        }
         let key = nextFactKey()
         notes[key] = Note(key: key, value: value, updatedAt: now, pinned: false)
+        return KbChange(key: key, previous: nil, value: value)
+    }
+
+    private func scrubMention(_ old: String) {
+        let pattern = "\\b\(NSRegularExpression.escapedPattern(for: old))\\b"
+        var staleKeys: [String] = []
+        for (key, note) in notes {
+            if key == "name" || key.hasPrefix("pet-") || key.hasPrefix("favorite-") { continue }
+            guard note.value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else {
+                continue
+            }
+            if key == "summary" {
+                var cleaned = note.value.replacingOccurrences(
+                    of: pattern,
+                    with: "",
+                    options: [.regularExpression, .caseInsensitive]
+                )
+                cleaned = cleaned
+                    .replacingOccurrences(of: #"\s*;\s*;\s*"#, with: "; ", options: .regularExpression)
+                    .replacingOccurrences(of: #"^;\s*|\s*;$"#, with: "", options: .regularExpression)
+                    .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if cleaned.isEmpty {
+                    staleKeys.append(key)
+                } else {
+                    notes[key] = Note(key: key, value: cleaned, updatedAt: note.updatedAt, pinned: note.pinned)
+                }
+            } else if key.hasPrefix("fact-") {
+                staleKeys.append(key)
+            }
+        }
+        for key in staleKeys { notes.removeValue(forKey: key) }
     }
 
     private func maintainLocked() -> Bool {
@@ -311,10 +443,13 @@ final class AudienceKb {
     private func orderedNotes() -> [Note] {
         let pinnedOrder = ["name", "likes", "from", "summary"]
         let pinned = pinnedOrder.compactMap { notes[$0] }
+        let structured = notes.values
+            .filter { $0.pinned && !pinnedOrder.contains($0.key) }
+            .sorted { $0.key < $1.key }
         let facts = notes.values
             .filter { !$0.pinned && $0.key.hasPrefix("fact-") }
             .sorted { $0.updatedAt < $1.updatedAt }
-        return pinned + facts
+        return pinned + structured + facts
     }
 
     private func nextFactKey() -> String {
@@ -349,9 +484,19 @@ final class AudienceKb {
     }
 
     private static let pinnedKeys: Set<String> = ["name", "likes", "from", "summary"]
+    private static let petKinds: Set<String> = ["dog", "cat", "bird", "fish", "hamster", "rabbit"]
 
     private static func isPinnedKey(_ key: String) -> Bool {
-        pinnedKeys.contains(key)
+        pinnedKeys.contains(key) || key.hasPrefix("pet-") || key.hasPrefix("favorite-")
+    }
+
+    private static func stripLeadIn(_ lower: String) -> String {
+        var s = lower.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = #"^(?:actually|no|nope|wait|sorry|correction|oh|um|uh)[,!]?\s+"#
+        while let range = s.range(of: pattern, options: .regularExpression) {
+            s = String(s[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s
     }
 
     private static let nameStop: Set<String> = [

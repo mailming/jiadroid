@@ -154,6 +154,19 @@ class FollowTest {
     }
 
     @Test
+    fun keepAliveExtendsConversationAcrossSlowReplies() {
+        val session = AttentionSession(holdMs = 30_000L)
+        session.consider("hey Vicky", "vicky", requireName = true, nowMs = 1_000L)
+        // Long think + talk would otherwise expire the window at 31_000.
+        session.keepAlive(25_000L)
+        session.keepAlive(40_000L)
+        assertTrue(session.isEngaged(45_000L))
+        val followUp = session.consider("what do you see", "vicky", requireName = true, nowMs = 50_000L)
+        assertTrue(followUp.addressed)
+        assertFalse(followUp.newConversation)
+    }
+
+    @Test
     fun duckWalksForwardInItsFacingDirection() {
         val pose = Pose(0f, 0f, (PI / 2.0).toFloat())
         stepPose(pose, 0.1f, 0f, 0f, 1f)
@@ -162,14 +175,21 @@ class FollowTest {
     }
 
     @Test
-    fun lostTargetStartsASearchSpinThenClearsOnReacquire() {
+    fun lostTargetScansLeftRightThenBacksUpAndClearsOnReacquire() {
         val search = LostSearch(graceMs = 200L, maxSearchMs = 5_000L, sliceMs = 1_000L, searchYaw = 0.5f)
         val hidden = decide(Scene(false, 0f, 0f))
         search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 0L, subject = "Marker")
-        val looking = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 1_000L, subject = "Marker")
-        assertEquals("SEARCH", looking.command)
+        val left = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 300L, subject = "Marker")
+        assertEquals("SEARCH", left.command)
+        assertTrue(left.yaw > 0f)
+        assertEquals(0f, left.forward, 0.0001f)
+        val right = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 1_300L, subject = "Marker")
+        assertTrue(right.yaw < 0f)
+        val back = search.enrich(Scene(false, 0f, 0f), hidden, nowMs = 2_300L, subject = "Marker")
+        assertTrue(back.forward < 0f)
+        assertEquals(0f, back.yaw, 0.0001f)
         assertTrue(search.searching)
-        search.enrich(Scene(true, 0f, 1f), decide(Scene(true, 0f, 1f)), nowMs = 2_000L, subject = "Marker")
+        search.enrich(Scene(true, 0f, 1f), decide(Scene(true, 0f, 1f)), nowMs = 2_500L, subject = "Marker")
         assertFalse(search.searching)
     }
 }

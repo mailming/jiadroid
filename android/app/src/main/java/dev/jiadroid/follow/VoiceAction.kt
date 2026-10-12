@@ -27,6 +27,17 @@ data class VoiceAction(val motion: VoiceMotion) {
             VoiceMotion.TURN_RIGHT -> "turning right briefly, then stopping"
         }
 
+    /** Short spoken confirmation so the user knows the motors got the command. */
+    val spokenAck: String
+        get() = when (motion) {
+            VoiceMotion.STOP -> "Stopping."
+            VoiceMotion.FOLLOW -> "Okay, following."
+            VoiceMotion.FORWARD -> "Going forward."
+            VoiceMotion.BACKWARD -> "Backing up."
+            VoiceMotion.TURN_LEFT -> "Turning left."
+            VoiceMotion.TURN_RIGHT -> "Turning right."
+        }
+
     fun decision(): FollowDecision = when (motion) {
         VoiceMotion.STOP -> stopped("Voice command: stopped")
         VoiceMotion.FOLLOW -> stopped("Voice command: follow")
@@ -35,15 +46,15 @@ data class VoiceAction(val motion: VoiceMotion) {
         VoiceMotion.BACKWARD ->
             FollowDecision("Voice command: backward", "BACKWARD", -0.06f, 0f, 0f, 0f)
         VoiceMotion.TURN_LEFT ->
-            FollowDecision("Voice command: turn left", "TURN LEFT", 0.12f, 0f, 0.40f, -0.4f)
+            FollowDecision("Voice command: turn left", "TURN LEFT", 0.07f, 0f, 0.85f, -0.4f)
         VoiceMotion.TURN_RIGHT ->
-            FollowDecision("Voice command: turn right", "TURN RIGHT", 0.12f, 0f, -0.40f, 0.4f)
+            FollowDecision("Voice command: turn right", "TURN RIGHT", 0.07f, 0f, -0.85f, 0.4f)
     }
 
     val durationMs: Long
         get() = when (motion) {
-            VoiceMotion.FORWARD, VoiceMotion.BACKWARD -> 1200L
-            VoiceMotion.TURN_LEFT, VoiceMotion.TURN_RIGHT -> 900L
+            VoiceMotion.FORWARD, VoiceMotion.BACKWARD -> 1_400L
+            VoiceMotion.TURN_LEFT, VoiceMotion.TURN_RIGHT -> 1_400L
             VoiceMotion.STOP, VoiceMotion.FOLLOW -> 0L
         }
 }
@@ -56,17 +67,24 @@ fun parseVoiceAction(transcript: String): VoiceAction? {
     if (Regex("""\b(don't|dont|do not|never|not)\b""").containsMatchIn(text)) return null
 
     return when {
-        Regex("""\b(stop|halt|freeze|emergency stop)\b""").containsMatchIn(text) ->
+        Regex("""\b(stop|halt|freeze|emergency stop|hold still|stay)\b""").containsMatchIn(text) ->
             VoiceAction(VoiceMotion.STOP)
-        Regex("""\b(follow me|resume following|start following)\b""").containsMatchIn(text) ->
+        Regex("""\b(follow me|resume following|start following|come follow)\b""").containsMatchIn(text) ->
             VoiceAction(VoiceMotion.FOLLOW)
-        Regex("""\b(turn|rotate|spin)\s+(to\s+the\s+)?left\b""").containsMatchIn(text) ->
+        Regex(
+            """\b((turn|rotate|spin|go|move|drive|walk|veer|head)(\s+(to(\s+the)?))?\s+left|left\s+turn|make a left)\b""",
+        ).containsMatchIn(text) || text == "left" ->
             VoiceAction(VoiceMotion.TURN_LEFT)
-        Regex("""\b(turn|rotate|spin)\s+(to\s+the\s+)?right\b""").containsMatchIn(text) ->
+        Regex(
+            """\b((turn|rotate|spin|go|move|drive|walk|veer|head)(\s+(to(\s+the)?))?\s+right|right\s+turn|make a right)\b""",
+        ).containsMatchIn(text) || text == "right" ->
             VoiceAction(VoiceMotion.TURN_RIGHT)
-        Regex("""\b(move|go|drive|walk)\s+(straight\s+)?forward\b""").containsMatchIn(text) ->
+        Regex("""\b((move|go|drive|walk)(\s+straight)?\s+forward|come forward)\b""")
+            .containsMatchIn(text) || text == "forward" ->
             VoiceAction(VoiceMotion.FORWARD)
-        Regex("""\b(move|go|drive|walk)\s+(straight\s+)?(back|backward|backwards)\b""").containsMatchIn(text) ->
+        Regex(
+            """\b((move|go|drive|walk)(\s+straight)?\s+(back|backward|backwards)|come back|back up|backup)\b""",
+        ).containsMatchIn(text) || text == "back" || text == "backward" || text == "backwards" ->
             VoiceAction(VoiceMotion.BACKWARD)
         else -> null
     }

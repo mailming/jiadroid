@@ -28,6 +28,18 @@ struct VoiceAction {
         }
     }
 
+    /// Short spoken confirmation so the user knows the motors got the command.
+    var spokenAck: String {
+        switch motion {
+        case .stop: return "Stopping."
+        case .follow: return "Okay, following."
+        case .forward: return "Going forward."
+        case .backward: return "Backing up."
+        case .turnLeft: return "Turning left."
+        case .turnRight: return "Turning right."
+        }
+    }
+
     func decision() -> FollowDecision {
         switch motion {
         case .stop:
@@ -39,16 +51,16 @@ struct VoiceAction {
         case .backward:
             return FollowDecision(situation: "Voice command: backward", command: "BACKWARD", forward: -0.06, lateral: 0, yaw: 0, headYaw: 0)
         case .turnLeft:
-            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0.12, lateral: 0, yaw: 0.40, headYaw: -0.4)
+            return FollowDecision(situation: "Voice command: turn left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.85, headYaw: -0.4)
         case .turnRight:
-            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0.12, lateral: 0, yaw: -0.40, headYaw: 0.4)
+            return FollowDecision(situation: "Voice command: turn right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.85, headYaw: 0.4)
         }
     }
 
     var durationMs: TimeInterval {
         switch motion {
-        case .forward, .backward: return 1.2
-        case .turnLeft, .turnRight: return 0.9
+        case .forward, .backward: return 1.4
+        case .turnLeft, .turnRight: return 1.4
         case .stop, .follow: return 0
         }
     }
@@ -62,22 +74,38 @@ func parseVoiceAction(_ transcript: String) -> VoiceAction? {
     if text.range(of: #"\b(don't|dont|do not|never|not)\b"#, options: .regularExpression) != nil {
         return nil
     }
-    if text.range(of: #"\b(stop|halt|freeze|emergency stop)\b"#, options: .regularExpression) != nil {
+    if text.range(of: #"\b(stop|halt|freeze|emergency stop|hold still|stay)\b"#, options: .regularExpression) != nil {
         return VoiceAction(motion: .stop)
     }
-    if text.range(of: #"\b(follow me|resume following|start following)\b"#, options: .regularExpression) != nil {
+    if text.range(of: #"\b(follow me|resume following|start following|come follow)\b"#, options: .regularExpression) != nil {
         return VoiceAction(motion: .follow)
     }
-    if text.range(of: #"\b(turn|rotate|spin)\s+(to\s+the\s+)?left\b"#, options: .regularExpression) != nil {
+    if text == "left" ||
+        text.range(
+            of: #"\b((turn|rotate|spin|go|move|drive|walk|veer|head)(\s+(to(\s+the)?))?\s+left|left\s+turn|make a left)\b"#,
+            options: .regularExpression
+        ) != nil {
         return VoiceAction(motion: .turnLeft)
     }
-    if text.range(of: #"\b(turn|rotate|spin)\s+(to\s+the\s+)?right\b"#, options: .regularExpression) != nil {
+    if text == "right" ||
+        text.range(
+            of: #"\b((turn|rotate|spin|go|move|drive|walk|veer|head)(\s+(to(\s+the)?))?\s+right|right\s+turn|make a right)\b"#,
+            options: .regularExpression
+        ) != nil {
         return VoiceAction(motion: .turnRight)
     }
-    if text.range(of: #"\b(move|go|drive|walk)\s+(straight\s+)?forward\b"#, options: .regularExpression) != nil {
+    if text == "forward" ||
+        text.range(
+            of: #"\b((move|go|drive|walk)(\s+straight)?\s+forward|come forward)\b"#,
+            options: .regularExpression
+        ) != nil {
         return VoiceAction(motion: .forward)
     }
-    if text.range(of: #"\b(move|go|drive|walk)\s+(straight\s+)?(back|backward|backwards)\b"#, options: .regularExpression) != nil {
+    if text == "back" || text == "backward" || text == "backwards" ||
+        text.range(
+            of: #"\b((move|go|drive|walk)(\s+straight)?\s+(back|backward|backwards)|come back|back up|backup)\b"#,
+            options: .regularExpression
+        ) != nil {
         return VoiceAction(motion: .backward)
     }
     return nil

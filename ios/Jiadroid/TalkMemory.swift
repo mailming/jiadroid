@@ -54,6 +54,30 @@ final class TalkMemory {
         lock.unlock()
     }
 
+    /// After the audience KB corrects a mis-heard name/fact, rewrite that word in
+    /// recent turns so the model is not pulled back to the wrong value.
+    func rewriteMention(from: String, to: String) {
+        let src = from.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dst = to.trimmingCharacters(in: .whitespacesAndNewlines)
+        if src.isEmpty || dst.isEmpty || src.compare(dst, options: .caseInsensitive) == .orderedSame {
+            return
+        }
+        let pattern = "\\b\(NSRegularExpression.escapedPattern(for: src))\\b"
+        lock.lock()
+        defer { lock.unlock() }
+        guard messages.contains(where: {
+            $0.text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }) else { return }
+        messages = messages.map { turn in
+            let text = turn.text.replacingOccurrences(
+                of: pattern,
+                with: dst,
+                options: [.regularExpression, .caseInsensitive]
+            )
+            return TalkTurn(role: turn.role, text: text)
+        }
+    }
+
     func contextBlock() -> String {
         lock.lock()
         defer { lock.unlock() }
