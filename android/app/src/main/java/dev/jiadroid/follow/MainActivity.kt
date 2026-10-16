@@ -21,6 +21,9 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -39,7 +42,9 @@ import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import dev.jiadroid.follow.databinding.ActivityMainBinding
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.atan
 import kotlin.math.hypot
@@ -52,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val link = AtomicReference<RobotClient?>(null)
     private var cameraProvider: ProcessCameraProvider? = null
+    private var imageCapture: ImageCapture? = null
     private var connecting = false
     private var ticking = false
     private var lastTickNs = 0L
@@ -173,6 +179,9 @@ class MainActivity : AppCompatActivity() {
         voice = VoiceSession(
             this,
             seeing = { situationText },
+            snapshot = ::captureVisionJpeg,
+            onShowEyes = { showScreen(Screen.Eyes) },
+            onVisionResult = ::showVisionResult,
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
@@ -235,6 +244,7 @@ class MainActivity : AppCompatActivity() {
         val robot = link.getAndSet(null)
         if (robot != null) release(robot)
         cameraProvider?.unbindAll()
+        imageCapture = null
         if (::voice.isInitialized) voice.destroy()
         scanner.close()
         bodies.close()
@@ -499,6 +509,18 @@ class MainActivity : AppCompatActivity() {
         binding.link.text = text
         binding.debugLink.text = text
         binding.manualLink.text = text
+    }
+
+    /** Big answer card on the eyes (front) screen for back-camera vision solves. */
+    private fun showVisionResult(text: String?) {
+        if (text.isNullOrBlank()) {
+            binding.visionResult.visibility = android.view.View.GONE
+            binding.visionResult.text = ""
+            return
+        }
+        binding.visionResult.text = text
+        binding.visionResult.visibility = android.view.View.VISIBLE
+        binding.voiceLine.text = text
     }
 
     private fun show(decision: FollowDecision, scene: Scene) {
@@ -860,11 +882,82 @@ class MainActivity : AppCompatActivity() {
         analysis.setAnalyzer(cameraExecutor, ::analyze)
         try {
             provider.unbindAll()
-            val camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
+            imageCapture = null
+            val camera = provider.bindToLifecycle(
+                this,
+                CameraSelector.DEFAULT_FRONT_CAMERA,
+                preview,
+                analysis,
+            )
             readHfov(camera)
         } catch (error: Exception) {
+            imageCapture = null
             binding.situation.text = error.message ?: getString(R.string.no_front_camera)
             Log.i(TAG, "camera bind failed", error)
+        }
+    }
+
+    /**
+     * Blocks briefly for a **back-camera** JPEG used by vision chat.
+     * Front follow camera is restored afterward. Call off the main thread.
+     */
+    private fun captureVisionJpeg(): ByteArray? {
+        val provider = cameraProvider ?: return null
+        if (!provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
+            Log.i(TAG, "no back camera for vision")
+            return null
+        }
+        val latch = CountDownLatch(1)
+        val holder = AtomicReference<ByteArray?>(null)
+        handler.post {
+            try {
+                provider.unbindAll()
+                imageCapture = null
+                val capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                imageCapture = capture
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, capture)
+                capture.takePicture(
+                    cameraExecutor,
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            try {
+                                val buffer = image.planes[0].buffer
+                                val bytes = ByteArray(buffer.remaining())
+                                buffer.get(bytes)
+                                holder.set(prepareVisionJpeg(bytes))
+                            } finally {
+                                image.close()
+                                restoreFrontCamera(provider, latch)
+                            }
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.i(TAG, "back vision capture failed: ${exception.message}")
+                            restoreFrontCamera(provider, latch)
+                        }
+                    },
+                )
+            } catch (error: Exception) {
+                Log.i(TAG, "back vision bind failed", error)
+                restoreFrontCamera(provider, latch)
+            }
+        }
+        return if (latch.await(6, TimeUnit.SECONDS)) holder.get() else {
+            handler.post { cameraProvider?.let { bindCamera(it) } }
+            null
+        }
+    }
+
+    private fun restoreFrontCamera(provider: ProcessCameraProvider, latch: CountDownLatch) {
+        handler.post {
+            try {
+                imageCapture = null
+                bindCamera(provider)
+            } finally {
+                latch.countDown()
+            }
         }
     }
 

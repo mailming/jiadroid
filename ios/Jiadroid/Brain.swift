@@ -3,7 +3,7 @@ import Foundation
 /// A language model for spoken replies. Anthropic URLs use the Messages API with
 /// Claude Haiku 5.5 settings; other hosts use OpenAI chat completions (OpenAI,
 /// xAI Grok, Ollama). Recent turns come from `TalkMemory`; lasting facts from
-/// `AudienceKb` (persisted on the phone).
+/// `AudienceKb` (persisted on the phone). Optional JPEG frames use vision APIs.
 final class Brain {
     private let baseURL: String
     private let model: String
@@ -23,7 +23,8 @@ final class Brain {
         seeing: String,
         name: String = defaultRobotName,
         memory: TalkMemory,
-        kb: AudienceKb
+        kb: AudienceKb,
+        imageJpeg: Data? = nil
     ) throws -> SpokenReply {
         let who = normalizeRobotName(name).capitalized
         let context = [kb.promptBlock(), memory.contextBlock()]
@@ -34,27 +35,31 @@ final class Brain {
             "The audience profile below persists across wake windows — always use it " +
             "(name, likes, where they're from, and saved facts). " +
             "Recent talk is only this window. Do not invent details."
+        if imageJpeg != nil {
+            system += "\n" + Self.visionAddendum
+        }
         if !context.isEmpty {
             system += "\n\n\(context)"
         }
         // User turn is already staged in `memory` before this call.
         let raw = try anthropic
-            ? askAnthropic(system: system, memory: memory)
-            : askOpenAI(system: system, memory: memory)
+            ? askAnthropic(system: system, memory: memory, imageJpeg: imageJpeg)
+            : askOpenAI(system: system, memory: memory, imageJpeg: imageJpeg)
         return parseSpokenReply(raw)
     }
 
-    private func askAnthropic(system: String, memory: TalkMemory) throws -> String {
-        let messages: [[String: String]] = memory.chatTurns().map { ["role": $0.role, "content": $0.text] }
+    private func askAnthropic(system: String, memory: TalkMemory, imageJpeg: Data?) throws -> String {
+        let messages = chatMessages(memory: memory, imageJpeg: imageJpeg, anthropic: true)
         guard !messages.isEmpty else { throw BrainError.failed("no user message to send") }
+        let maxTokens = imageJpeg == nil ? Self.anthropicMaxTokens : Self.anthropicVisionMaxTokens
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": Self.anthropicMaxTokens,
+            "max_tokens": maxTokens,
             "system": system,
             "messages": messages,
             "output_config": ["effort": "low"],
         ]
-        let json = try post(path: "/messages", body: body, anthropic: true)
+        let json = try post(path: "/messages", body: body, anthropic: true, vision: imageJpeg != nil)
         if json["stop_reason"] as? String == "refusal" {
             throw BrainError.failed("model refused the request")
         }
@@ -72,19 +77,20 @@ final class Brain {
         return text
     }
 
-    private func askOpenAI(system: String, memory: TalkMemory) throws -> String {
-        var messages: [[String: String]] = [
+    private func askOpenAI(system: String, memory: TalkMemory, imageJpeg: Data?) throws -> String {
+        var messages: [[String: Any]] = [
             ["role": "system", "content": system],
         ]
-        messages.append(contentsOf: memory.chatTurns().map { ["role": $0.role, "content": $0.text] })
+        messages.append(contentsOf: chatMessages(memory: memory, imageJpeg: imageJpeg, anthropic: false))
         guard messages.count >= 2 else { throw BrainError.failed("no user message to send") }
+        let maxTokens = imageJpeg == nil ? Self.openAIMaxTokens : Self.openAIVisionMaxTokens
         let body: [String: Any] = [
             "model": model,
             "messages": messages,
-            "max_tokens": Self.openAIMaxTokens,
+            "max_tokens": maxTokens,
             "temperature": 0.9,
         ]
-        let json = try post(path: "/chat/completions", body: body, anthropic: false)
+        let json = try post(path: "/chat/completions", body: body, anthropic: false, vision: imageJpeg != nil)
         guard
             let choices = json["choices"] as? [[String: Any]],
             let message = choices.first?["message"] as? [String: Any],
@@ -97,12 +103,53 @@ final class Brain {
         return text
     }
 
-    private func post(path: String, body: [String: Any], anthropic: Bool) throws -> [String: Any] {
+    private func chatMessages(memory: TalkMemory, imageJpeg: Data?, anthropic: Bool) -> [[String: Any]] {
+        let turns = memory.chatTurns()
+        let lastUser = turns.lastIndex(where: { $0.role == "user" })
+        return turns.enumerated().map { index, turn in
+            if let imageJpeg, index == lastUser {
+                return visionUserMessage(text: turn.text, imageJpeg: imageJpeg, anthropic: anthropic)
+            }
+            return ["role": turn.role, "content": turn.text]
+        }
+    }
+
+    private func visionUserMessage(text: String, imageJpeg: Data, anthropic: Bool) -> [String: Any] {
+        let b64 = imageJpeg.base64EncodedString()
+        if anthropic {
+            return [
+                "role": "user",
+                "content": [
+                    [
+                        "type": "image",
+                        "source": [
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": b64,
+                        ],
+                    ],
+                    ["type": "text", "text": text],
+                ],
+            ]
+        }
+        return [
+            "role": "user",
+            "content": [
+                ["type": "text", "text": text],
+                [
+                    "type": "image_url",
+                    "image_url": ["url": "data:image/jpeg;base64,\(b64)"],
+                ],
+            ],
+        ]
+    }
+
+    private func post(path: String, body: [String: Any], anthropic: Bool, vision: Bool) throws -> [String: Any] {
         let root = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: root + path) else {
             throw BrainError.badURL
         }
-        var request = URLRequest(url: url, timeoutInterval: 30)
+        var request = URLRequest(url: url, timeoutInterval: vision ? 60 : 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,7 +174,8 @@ final class Brain {
             semaphore.signal()
         }
         task.resume()
-        if semaphore.wait(timeout: .now() + 38) == .timedOut {
+        let wait = vision ? 68.0 : 38.0
+        if semaphore.wait(timeout: .now() + wait) == .timedOut {
             task.cancel()
             throw BrainError.failed("model timed out")
         }
@@ -145,7 +193,17 @@ final class Brain {
     private static let anthropicVersion = "2023-06-01"
     /// Room for adaptive thinking plus a short spoken reply.
     private static let anthropicMaxTokens = 1024
+    private static let anthropicVisionMaxTokens = 1024
     private static let openAIMaxTokens = 80
+    private static let openAIVisionMaxTokens = 220
+
+    private static let visionAddendum =
+        "A photo from the robot's back camera is attached (paper or a phone/laptop screen). " +
+        "Read any math, coding, or other text in the photo. " +
+        "Speak a short kid-friendly answer: for math give the result and a tiny why; " +
+        "for coding give the idea in one or two short sentences, not a long program. " +
+        "If the photo is blank or unreadable, say so in one short line. " +
+        "You may use up to two short sentences for vision answers."
 
     private static func personality(_ who: String) -> String {
         "You are \(who), a small walking robot whose face is a phone showing a pair of big eyes. " +

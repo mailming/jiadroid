@@ -38,6 +38,8 @@ final class FollowSession: ObservableObject, CameraSink {
     private var lastBumpPollAt = Date.distantPast
     private var bumpPolling = false
     private var lastTrailAt = Date.distantPast
+    /// ContentView sets this so vision answers jump to the eyes (front) screen.
+    var presentEyes: (() -> Void)?
 
     func start() {
         camera.sink = self
@@ -56,6 +58,13 @@ final class FollowSession: ObservableObject, CameraSink {
         if voiceSession == nil {
             voiceSession = VoiceSession(
                 seeing: { [weak self] in self?.status.situation ?? "Marker is lost" },
+                snapshot: { [weak self] in self?.captureVisionJpeg() },
+                onShowEyes: { [weak self] in
+                    DispatchQueue.main.async { self?.presentEyes?() }
+                },
+                onVisionResult: { [weak self] text in
+                    DispatchQueue.main.async { self?.voice.visionResult = text }
+                },
                 onLine: { [weak self] line in self?.voice.line = line },
                 onTurn: { [weak self] who, text in self?.logTurn(who, text) },
                 onHearing: { [weak self] text in self?.logHearing(text) },
@@ -65,6 +74,18 @@ final class FollowSession: ObservableObject, CameraSink {
             loadBrain(save: false)
         }
         resume()
+    }
+
+    /// Blocks briefly for a back-camera JPEG used by vision chat. Call off the main thread.
+    private func captureVisionJpeg() -> Data? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var jpeg: Data?
+        camera.captureStill { data in
+            jpeg = data.map { prepareVisionJpeg($0) }
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 3.5)
+        return jpeg
     }
 
     func resume() {
@@ -702,6 +723,8 @@ final class LinkModel: ObservableObject {
 
 final class VoiceModel: ObservableObject {
     @Published var line = "Listening"
+    /// Large answer card on the eyes screen for back-camera vision solves.
+    @Published var visionResult: String?
     @Published var talkLog = "What you say and what it answers shows here."
     @Published var say = ""
     @Published var emotion: Emotion = .listening
