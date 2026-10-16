@@ -11,6 +11,12 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     var robotName: String = defaultRobotName
 
     private let seeing: () -> String
+    /// Back-camera JPEG for “look at this / solve this”. Call off the main thread.
+    private let snapshot: () -> Data?
+    /// Bring the eyes (front) screen forward so the audience sees the answer.
+    private let onShowEyes: () -> Void
+    /// Show or clear the large vision answer on the eyes screen.
+    private let onVisionResult: (String?) -> Void
     private let onLine: (String) -> Void
     private let onTurn: (String, String) -> Void
     private let onHearing: (String) -> Void
@@ -40,6 +46,9 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
 
     init(
         seeing: @escaping () -> String,
+        snapshot: @escaping () -> Data?,
+        onShowEyes: @escaping () -> Void,
+        onVisionResult: @escaping (String?) -> Void,
         onLine: @escaping (String) -> Void,
         onTurn: @escaping (String, String) -> Void,
         onHearing: @escaping (String) -> Void,
@@ -47,6 +56,9 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         onAction: @escaping (VoiceAction) -> Void
     ) {
         self.seeing = seeing
+        self.snapshot = snapshot
+        self.onShowEyes = onShowEyes
+        self.onVisionResult = onVisionResult
         self.onLine = onLine
         self.onTurn = onTurn
         self.onHearing = onHearing
@@ -139,43 +151,68 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         attention.keepAlive(now: Date())
         let seen = seeing()
         let request = gate.utterance
+        let look = wantsCameraLook(request)
         // Recall before staging this turn so "what did I just say" still sees the prior line.
-        if let localRecall = kb.recallReply(heard: request) ?? memory.recallReply(heard: request) {
-            speak(localRecall, rememberUser: request, userAlreadyStaged: false)
-            return
+        // Vision asks always go to the camera + model (skip local recall).
+        if !look {
+            if let localRecall = kb.recallReply(heard: request) ?? memory.recallReply(heard: request) {
+                speak(localRecall, rememberUser: request, userAlreadyStaged: false)
+                return
+            }
         }
         // Absorb facts and stage this user line BEFORE the model runs.
         // Corrections also rewrite mis-heard names already sitting in TalkMemory.
         absorbIntoMemory(request)
         guard let brain else {
-            let spoken = reply(heard: request, seeing: seen, name: name, memory: memory, kb: kb)
-            speak(spoken, rememberUser: request, userAlreadyStaged: true)
+            let spoken = look
+                ? SpokenReply(say: "Add a model key so I can look at that.", emotion: .curious)
+                : reply(heard: request, seeing: seen, name: name, memory: memory, kb: kb)
+            speak(spoken, rememberUser: request, userAlreadyStaged: true, vision: look)
             return
         }
         // Stay listening while the model runs — do not hold the speaking lock here.
         let thinkId = thinkGeneration
         onEmotion(.thinking)
-        onLine("Thinking…")
+        if look {
+            onShowEyes()
+            onVisionResult("Looking with the back camera…")
+            onLine("Looking with the back camera…")
+        } else {
+            onVisionResult(nil)
+            onLine("Thinking…")
+        }
         reopenForBargeInSoon()
         thinker.async { [weak self] in
             guard let self else { return }
+            let jpeg = look ? self.snapshot() : nil
             let spoken: SpokenReply
-            do {
-                spoken = try brain.answer(
-                    heard: request,
-                    seeing: seen,
-                    name: name,
-                    memory: self.memory,
-                    kb: self.kb
+            if look && jpeg == nil {
+                spoken = SpokenReply(
+                    say: "Point the back camera at the paper or screen.",
+                    emotion: .curious
                 )
-            } catch {
-                DispatchQueue.main.async { self.onTurn("Model", "failed: \(error.localizedDescription)") }
-                spoken = reply(heard: request, seeing: seen, name: name, memory: self.memory, kb: self.kb)
+            } else {
+                do {
+                    if look {
+                        DispatchQueue.main.async { self.onTurn("Camera", "back camera photo sent to the model") }
+                    }
+                    spoken = try brain.answer(
+                        heard: request,
+                        seeing: seen,
+                        name: name,
+                        memory: self.memory,
+                        kb: self.kb,
+                        imageJpeg: jpeg
+                    )
+                } catch {
+                    DispatchQueue.main.async { self.onTurn("Model", "failed: \(error.localizedDescription)") }
+                    spoken = reply(heard: request, seeing: seen, name: name, memory: self.memory, kb: self.kb)
+                }
             }
             DispatchQueue.main.async {
                 guard thinkId == self.thinkGeneration else { return }
                 self.attention.keepAlive()
-                self.speak(spoken, rememberUser: request, userAlreadyStaged: true)
+                self.speak(spoken, rememberUser: request, userAlreadyStaged: true, vision: look)
             }
         }
     }
@@ -325,7 +362,12 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         }
     }
 
-    private func speak(_ spoken: SpokenReply, rememberUser: String?, userAlreadyStaged: Bool) {
+    private func speak(
+        _ spoken: SpokenReply,
+        rememberUser: String?,
+        userAlreadyStaged: Bool,
+        vision: Bool = false
+    ) {
         if let rememberUser {
             if userAlreadyStaged {
                 memory.rememberAssistant(spoken.say)
@@ -340,6 +382,12 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         onEmotion(spoken.emotion)
         onTurn("Me", spoken.say)
         onLine(spoken.say)
+        if vision {
+            onShowEyes()
+            onVisionResult(spoken.say)
+        } else {
+            onVisionResult(nil)
+        }
         speakGeneration += 1
         let generation = speakGeneration
         let utterance = AVSpeechUtterance(string: spoken.say)

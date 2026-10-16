@@ -24,6 +24,12 @@ import java.util.concurrent.Executors
 class VoiceSession(
     private val activity: AppCompatActivity,
     private val seeing: () -> String,
+    /** Back-camera JPEG for “look at this / solve this”. Call off the main thread. */
+    private val snapshot: () -> ByteArray?,
+    /** Bring the eyes (front) screen forward so the audience sees the answer. */
+    private val onShowEyes: () -> Unit,
+    /** Show or clear the large vision answer on the eyes screen. */
+    private val onVisionResult: (String?) -> Unit,
     private val onLine: (String) -> Unit,
     private val onTurn: (who: String, text: String) -> Unit,
     private val onHearing: (String) -> Unit,
@@ -416,12 +422,16 @@ class VoiceSession(
         attention.keepAlive(SystemClock.elapsedRealtime())
         val seen = seeing()
         val request = gate.utterance
+        val look = wantsCameraLook(request)
         // Deterministic KB / short-term recall before spending a model call.
         // Do this before staging the new user turn so "what did I just say" still works.
-        val localRecall = kb.recallReply(request) ?: memory.recallReply(request)
-        if (localRecall != null) {
-            speak(localRecall, rememberUser = request, userAlreadyStaged = false)
-            return
+        // Vision asks always go to the camera + model (skip local recall).
+        if (!look) {
+            val localRecall = kb.recallReply(request) ?: memory.recallReply(request)
+            if (localRecall != null) {
+                speak(localRecall, rememberUser = request, userAlreadyStaged = false)
+                return
+            }
         }
         // Absorb facts and stage this user line BEFORE the model runs so the KB
         // and chat history are visible on this same turn. Corrections also rewrite
@@ -429,22 +439,43 @@ class VoiceSession(
         absorbIntoMemory(request)
         val brain = brain
         if (brain == null) {
-            val spoken = reply(request, seen, name, memory, kb)
-            speak(spoken, rememberUser = request, userAlreadyStaged = true)
+            val spoken = if (look) {
+                SpokenReply("Add a model key so I can look at that.", Emotion.CURIOUS)
+            } else {
+                reply(request, seen, name, memory, kb)
+            }
+            speak(spoken, rememberUser = request, userAlreadyStaged = true, vision = look)
             return
         }
         // Stay listening while the model runs — do not hold the speaking lock here,
         // or follow-ups get dropped until TTS finishes.
         val thinkId = thinkGeneration
         onEmotion(Emotion.THINKING)
-        onLine("Thinking…")
+        if (look) {
+            onShowEyes()
+            onVisionResult("Looking with the back camera…")
+            onLine("Looking with the back camera…")
+        } else {
+            onVisionResult(null)
+            onLine("Thinking…")
+        }
         scheduleListen(delayMs = 120L)
         thinker.execute {
-            val spoken = try {
-                brain.answer(request, seen, name, memory, kb)
-            } catch (error: Exception) {
-                activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
-                reply(request, seen, name, memory, kb)
+            val jpeg = if (look) snapshot() else null
+            val spoken = when {
+                look && jpeg == null -> SpokenReply(
+                    "Point the back camera at the paper or screen.",
+                    Emotion.CURIOUS,
+                )
+                else -> try {
+                    if (look) {
+                        activity.runOnUiThread { onTurn("Camera", "back camera photo sent to the model") }
+                    }
+                    brain.answer(request, seen, name, memory, kb, jpeg)
+                } catch (error: Exception) {
+                    activity.runOnUiThread { onTurn("Model", "failed: ${error.message}") }
+                    reply(request, seen, name, memory, kb)
+                }
             }
             activity.runOnUiThread {
                 if (thinkId != thinkGeneration) {
@@ -452,7 +483,7 @@ class VoiceSession(
                     return@runOnUiThread
                 }
                 attention.keepAlive(SystemClock.elapsedRealtime())
-                speak(spoken, rememberUser = request, userAlreadyStaged = true)
+                speak(spoken, rememberUser = request, userAlreadyStaged = true, vision = look)
             }
         }
     }
@@ -466,7 +497,12 @@ class VoiceSession(
         }
     }
 
-    private fun speak(spoken: SpokenReply, rememberUser: String?, userAlreadyStaged: Boolean) {
+    private fun speak(
+        spoken: SpokenReply,
+        rememberUser: String?,
+        userAlreadyStaged: Boolean,
+        vision: Boolean = false,
+    ) {
         if (rememberUser != null) {
             if (userAlreadyStaged) {
                 memory.rememberAssistant(spoken.say)
@@ -481,6 +517,12 @@ class VoiceSession(
         onEmotion(spoken.emotion)
         onTurn("Me", spoken.say)
         onLine(spoken.say)
+        if (vision) {
+            onShowEyes()
+            onVisionResult(spoken.say)
+        } else {
+            onVisionResult(null)
+        }
         val speaker = speaker
         val generation = ++speakGeneration
         if (!readyToSpeak || speaker == null ||

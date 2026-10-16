@@ -1,5 +1,6 @@
 package dev.jiadroid.follow
 
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -9,7 +10,7 @@ import java.net.URL
  * A language model for spoken replies. Anthropic URLs use the Messages API with
  * Claude Haiku 5.5 settings; other hosts use OpenAI chat completions (OpenAI,
  * xAI Grok, Ollama). Recent turns come from [TalkMemory]; lasting facts from
- * [AudienceKb] (persisted on the phone).
+ * [AudienceKb] (persisted on the phone). Optional JPEG frames use vision APIs.
  */
 class Brain(private val baseUrl: String, private val model: String, private val key: String) {
     private val anthropic = baseUrl.contains("anthropic", ignoreCase = true)
@@ -21,6 +22,7 @@ class Brain(private val baseUrl: String, private val model: String, private val 
         name: String = DEFAULT_ROBOT_NAME,
         memory: TalkMemory,
         kb: AudienceKb,
+        imageJpeg: ByteArray? = null,
     ): SpokenReply {
         val who = normalizeRobotName(name).replaceFirstChar { it.titlecase() }
         val context = listOf(kb.promptBlock(), memory.contextBlock())
@@ -35,26 +37,35 @@ class Brain(private val baseUrl: String, private val model: String, private val 
                     "(name, likes, where they're from, and saved facts). " +
                     "Recent talk is only this window. Do not invent details.",
             )
+            if (imageJpeg != null) {
+                append("\n")
+                append(VISION_ADDENDUM)
+            }
             if (context.isNotEmpty()) {
                 append("\n\n")
                 append(context)
             }
         }
         // User turn is already staged in [memory] before this call.
-        val raw = if (anthropic) askAnthropic(system, memory) else askOpenAi(system, memory)
+        val raw = if (anthropic) {
+            askAnthropic(system, memory, imageJpeg)
+        } else {
+            askOpenAi(system, memory, imageJpeg)
+        }
         return parseSpokenReply(raw)
     }
 
-    private fun askAnthropic(system: String, memory: TalkMemory): String {
-        val messages = chatMessages(memory)
+    private fun askAnthropic(system: String, memory: TalkMemory, imageJpeg: ByteArray?): String {
+        val messages = chatMessages(memory, imageJpeg, anthropic = true)
         if (messages.length() == 0) throw IllegalStateException("no user message to send")
+        val maxTokens = if (imageJpeg != null) ANTHROPIC_VISION_MAX_TOKENS else ANTHROPIC_MAX_TOKENS
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", ANTHROPIC_MAX_TOKENS)
+            .put("max_tokens", maxTokens)
             .put("system", system)
             .put("messages", messages)
             .put("output_config", JSONObject().put("effort", "low"))
-        val response = post(baseUrl.trimEnd('/') + "/messages", body, anthropic = true)
+        val response = post(baseUrl.trimEnd('/') + "/messages", body, anthropic = true, vision = imageJpeg != null)
         if (response.optString("stop_reason") == "refusal") {
             throw IllegalStateException("model refused the request")
         }
@@ -71,18 +82,24 @@ class Brain(private val baseUrl: String, private val model: String, private val 
         return raw
     }
 
-    private fun askOpenAi(system: String, memory: TalkMemory): String {
+    private fun askOpenAi(system: String, memory: TalkMemory, imageJpeg: ByteArray?): String {
         val messages = JSONArray()
         messages.put(message("system", system))
-        val chat = chatMessages(memory)
+        val chat = chatMessages(memory, imageJpeg, anthropic = false)
         for (i in 0 until chat.length()) messages.put(chat.getJSONObject(i))
         if (messages.length() < 2) throw IllegalStateException("no user message to send")
+        val maxTokens = if (imageJpeg != null) OPENAI_VISION_MAX_TOKENS else OPENAI_MAX_TOKENS
         val body = JSONObject()
             .put("model", model)
             .put("messages", messages)
-            .put("max_tokens", OPENAI_MAX_TOKENS)
+            .put("max_tokens", maxTokens)
             .put("temperature", 0.9)
-        val response = post(baseUrl.trimEnd('/') + "/chat/completions", body, anthropic = false)
+        val response = post(
+            baseUrl.trimEnd('/') + "/chat/completions",
+            body,
+            anthropic = false,
+            vision = imageJpeg != null,
+        )
         return response
             .getJSONArray("choices").getJSONObject(0)
             .getJSONObject("message").getString("content")
@@ -90,18 +107,60 @@ class Brain(private val baseUrl: String, private val model: String, private val 
             .ifEmpty { throw IllegalStateException("model reply was empty") }
     }
 
-    private fun chatMessages(memory: TalkMemory): JSONArray {
+    /**
+     * Builds chat turns. When [imageJpeg] is set, the latest user turn carries the
+     * photo so the model can read paper or a screen.
+     */
+    private fun chatMessages(memory: TalkMemory, imageJpeg: ByteArray?, anthropic: Boolean): JSONArray {
+        val turns = memory.chatTurns()
         val messages = JSONArray()
-        memory.chatTurns().forEach { messages.put(message(it.role, it.text)) }
+        val lastUser = turns.indexOfLast { it.role == "user" }
+        turns.forEachIndexed { index, turn ->
+            if (imageJpeg != null && index == lastUser) {
+                messages.put(visionUserMessage(turn.text, imageJpeg, anthropic))
+            } else {
+                messages.put(message(turn.role, turn.text))
+            }
+        }
         return messages
     }
 
-    private fun post(url: String, body: JSONObject, anthropic: Boolean): JSONObject {
+    private fun visionUserMessage(text: String, imageJpeg: ByteArray, anthropic: Boolean): JSONObject {
+        val b64 = Base64.encodeToString(imageJpeg, Base64.NO_WRAP)
+        val content = JSONArray()
+        if (anthropic) {
+            content.put(
+                JSONObject()
+                    .put("type", "image")
+                    .put(
+                        "source",
+                        JSONObject()
+                            .put("type", "base64")
+                            .put("media_type", "image/jpeg")
+                            .put("data", b64),
+                    ),
+            )
+            content.put(JSONObject().put("type", "text").put("text", text))
+        } else {
+            content.put(JSONObject().put("type", "text").put("text", text))
+            content.put(
+                JSONObject()
+                    .put("type", "image_url")
+                    .put(
+                        "image_url",
+                        JSONObject().put("url", "data:image/jpeg;base64,$b64"),
+                    ),
+            )
+        }
+        return JSONObject().put("role", "user").put("content", content)
+    }
+
+    private fun post(url: String, body: JSONObject, anthropic: Boolean, vision: Boolean): JSONObject {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = 8000
-            connection.readTimeout = 30000
+            connection.readTimeout = if (vision) 60_000 else 30_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
             if (key.isNotBlank()) {
@@ -129,7 +188,17 @@ class Brain(private val baseUrl: String, private val model: String, private val 
         const val ANTHROPIC_VERSION = "2023-06-01"
         /** Room for adaptive thinking plus a short spoken reply. */
         const val ANTHROPIC_MAX_TOKENS = 1024
+        const val ANTHROPIC_VISION_MAX_TOKENS = 1024
         const val OPENAI_MAX_TOKENS = 80
+        const val OPENAI_VISION_MAX_TOKENS = 220
+
+        const val VISION_ADDENDUM =
+            "A photo from the robot's back camera is attached (paper or a phone/laptop screen). " +
+                "Read any math, coding, or other text in the photo. " +
+                "Speak a short kid-friendly answer: for math give the result and a tiny why; " +
+                "for coding give the idea in one or two short sentences, not a long program. " +
+                "If the photo is blank or unreadable, say so in one short line. " +
+                "You may use up to two short sentences for vision answers."
 
         fun personality(who: String) =
             "You are $who, a small walking robot whose face is a phone showing a pair of big eyes. " +

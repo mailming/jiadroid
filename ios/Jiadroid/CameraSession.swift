@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreImage
 import UIKit
 import Vision
 
@@ -17,7 +18,7 @@ protocol CameraSink: AnyObject {
     func cameraFailed(_ message: String)
 }
 
-/// Front camera. The QR code wins. Otherwise a person's shoulders and hips are followed.
+/// Front camera follows a person or QR marker. Vision “look at this” shots use the back camera.
 final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
     weak var sink: CameraSink?
@@ -25,11 +26,17 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     var personHeightMeters: () -> Float = { personHeightMM / 1000 }
 
     private let queue = DispatchQueue(label: "dev.jiadroid.camera")
+    private let ciContext = CIContext(options: nil)
     private var hfov = 70.0 * Double.pi / 180.0
     private var rotation: CGFloat = 0
     private var lastScan = Date.distantPast
     private var running = false
     private var device: AVCaptureDevice?
+    private var frontInput: AVCaptureDeviceInput?
+    private var videoOutput: AVCaptureVideoDataOutput?
+    private var capturingFromBack = false
+    private var stillGeneration = 0
+    private var pendingStill: (generation: Int, completion: (Data?) -> Void)?
 
     func start() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
@@ -50,6 +57,7 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
     func stop() {
         queue.async {
+            self.finishStill(generation: self.stillGeneration, data: nil)
             if self.session.isRunning { self.session.stopRunning() }
             self.running = false
         }
@@ -68,6 +76,25 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         apply(rotation, to: connection, mirror: true)
     }
 
+    /// Captures one JPEG from the **back** camera (falls back to front if needed).
+    /// Completion runs on the camera queue.
+    func captureStill(completion: @escaping (Data?) -> Void) {
+        queue.async {
+            self.stillGeneration += 1
+            let generation = self.stillGeneration
+            self.pendingStill = (generation, completion)
+            if self.switchToBackCamera() {
+                self.capturingFromBack = true
+            } else {
+                // No back camera — take the next front frame instead.
+                self.capturingFromBack = false
+            }
+            self.queue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.finishStill(generation: generation, data: nil)
+            }
+        }
+    }
+
     private func configureAndRun() {
         if running {
             if !session.isRunning { session.startRunning() }
@@ -83,6 +110,7 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             return
         }
         self.device = device
+        self.frontInput = input
         session.addInput(input)
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
@@ -94,6 +122,7 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             return
         }
         session.addOutput(output)
+        self.videoOutput = output
         rotation = rotationAngle(.landscapeRight)
         apply(rotation, to: output.connection(with: .video), mirror: false)
         readFov(device, rotation: rotation)
@@ -103,10 +132,19 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        if let pending = pendingStill {
+            // Prefer a real JPEG from this frame; timeout clears a failed capture.
+            if let jpeg = jpegData(from: pixel) {
+                finishStill(generation: pending.generation, data: jpeg)
+            }
+            return
+        }
+        // Skip follow ML while the back camera is swapped in.
+        if capturingFromBack { return }
         let now = Date()
         if now.timeIntervalSince(lastScan) < 0.08 { return }
         lastScan = now
-        guard let pixel = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let imageWidth = CVPixelBufferGetWidth(pixel)
         let imageHeight = CVPixelBufferGetHeight(pixel)
         guard imageWidth > 0, imageHeight > 0 else { return }
@@ -130,6 +168,61 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
             return
         }
         publishPerson(pose.results?.first, imageWidth, imageHeight)
+    }
+
+    @discardableResult
+    private func switchToBackCamera() -> Bool {
+        guard let back = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+              let backInput = try? AVCaptureDeviceInput(device: back) else {
+            return false
+        }
+        session.beginConfiguration()
+        for input in session.inputs {
+            session.removeInput(input)
+        }
+        guard session.canAddInput(backInput) else {
+            if let front = frontInput, session.canAddInput(front) {
+                session.addInput(front)
+            }
+            session.commitConfiguration()
+            return false
+        }
+        session.addInput(backInput)
+        device = back
+        apply(rotation, to: videoOutput?.connection(with: .video), mirror: false)
+        session.commitConfiguration()
+        return true
+    }
+
+    private func restoreFrontCamera() {
+        guard let front = frontInput else { return }
+        session.beginConfiguration()
+        for input in session.inputs {
+            session.removeInput(input)
+        }
+        if session.canAddInput(front) {
+            session.addInput(front)
+            device = front.device
+            apply(rotation, to: videoOutput?.connection(with: .video), mirror: false)
+            readFov(front.device, rotation: rotation)
+        }
+        session.commitConfiguration()
+        capturingFromBack = false
+    }
+
+    private func finishStill(generation: Int, data: Data?) {
+        guard let pending = pendingStill, pending.generation == generation else { return }
+        pendingStill = nil
+        if capturingFromBack {
+            restoreFrontCamera()
+        }
+        pending.completion(data)
+    }
+
+    private func jpegData(from pixel: CVPixelBuffer) -> Data? {
+        let image = CIImage(cvPixelBuffer: pixel)
+        guard let cg = ciContext.createCGImage(image, from: image.extent) else { return nil }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.85)
     }
 
     private func publishMarker(_ hit: VNBarcodeObservation, _ imageWidth: Int, _ imageHeight: Int) {
