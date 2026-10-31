@@ -18,8 +18,8 @@ import java.util.concurrent.Executors
 /**
  * Listens with the phone microphone and speaks the reply. Speech is turned into
  * text by Android's [SpeechRecognizer] (usually Google's on-device / cloud engine).
- * The mic mostly pauses while the phone talks; a wake-name barge-in path stays
- * open so "hey Vicky…" can interrupt a long reply.
+ * The mic mostly pauses while the phone talks; only "stop" or "hey <name>…"
+ * may interrupt a long reply (the name alone matches TTS lines like "I'm Vicky").
  */
 class VoiceSession(
     private val activity: AppCompatActivity,
@@ -139,18 +139,23 @@ class VoiceSession(
             val text = bestResult(results)
             val wasSpeaking = speaking
             if (!text.isNullOrBlank() && alive) {
-                // While TTS plays, only wake/stop may interrupt — otherwise we hear ourselves.
-                if (speaking && !isWakeOrStop(text)) {
-                    Log.i(TAG, "ignore loudspeaker while talking: $text")
+                // While TTS plays the mic hears the loudspeaker. Only "stop" may
+                // interrupt — the wake name alone matches lines like "I'm Vicky".
+                if (speaking) {
+                    if (parseVoiceAction(text)?.motion == VoiceMotion.STOP) {
+                        answer(text)
+                    } else {
+                        Log.i(TAG, "ignore loudspeaker while talking: $text")
+                    }
                 } else {
                     answer(text)
                 }
             }
-            // Full listen after a turn ends; wake/stop mic while talking.
             if (!speaking) {
                 scheduleListen()
             } else if (wasSpeaking) {
-                scheduleListen(delayMs = 250L)
+                // Keep a stop-only ear open; finals that are echo stay dropped above.
+                scheduleListen(delayMs = 400L)
             }
         }
 
@@ -160,8 +165,8 @@ class VoiceSession(
             if (text.isBlank()) return
             // Halt as soon as "stop" appears — don't wait for end-of-speech silence.
             if (tryEarlyStop(text)) return
-            // Only the wake name may interrupt TTS (not open-window chatter / echo).
-            if (speaking && parseAttention(text, robotName).addressed) {
+            // Barge-in needs "hey Vicky…", not the name alone (TTS often says "I'm Vicky").
+            if (speaking && isBargeInWake(text, robotName)) {
                 bargeIn()
             }
             if (speaking) return
@@ -305,7 +310,7 @@ class VoiceSession(
         val now = SystemClock.elapsedRealtime()
         // Keep the conversation window open across the reply so follow-ups work.
         if (attention.isEngaged(now)) attention.keepAlive(now)
-        // Room echo of our own TTS often lands right after playback ends.
+        // Hard mute after TTS: room echo of our own reply must not become a turn.
         ignoreHearUntilMs = now + ECHO_COOLDOWN_MS
         if (!alive) return
         onEmotion(Emotion.LISTENING)
@@ -313,7 +318,7 @@ class VoiceSession(
         scheduleListen(delayMs = ECHO_COOLDOWN_MS)
     }
 
-    /** Stop TTS so a wake name said over the reply can be handled. */
+    /** Stop TTS so "hey <name>…" said over the reply can be handled. */
     private fun bargeIn() {
         speakGeneration += 1
         thinkGeneration += 1
@@ -326,11 +331,6 @@ class VoiceSession(
         // Brief mute so the interrupted TTS trail is not heard as the user.
         ignoreHearUntilMs = SystemClock.elapsedRealtime() + ECHO_COOLDOWN_MS
         onLine("Listening")
-    }
-
-    private fun isWakeOrStop(heard: String): Boolean {
-        if (parseVoiceAction(heard)?.motion == VoiceMotion.STOP) return true
-        return parseAttention(heard, robotName).addressed
     }
 
     /**
@@ -370,7 +370,10 @@ class VoiceSession(
      */
     fun answer(heard: String, requireName: Boolean = true) {
         if (isNoise(heard)) return
-        if (isEchoOfSelf(heard)) return
+        if (isEchoOfSelf(heard)) {
+            Log.i(TAG, "ignore echo of self: $heard")
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         // Safety stop first — works outside the wake window and during TTS.
         if (parseVoiceAction(heard)?.motion == VoiceMotion.STOP) {
@@ -379,19 +382,20 @@ class VoiceSession(
         }
         val name = normalizeRobotName(robotName)
         val wake = parseAttention(heard, name)
-        // TTS can be interrupted by wake name only (stop already handled above).
+        // During TTS only "hey <name>…" may barge in (stop already handled above).
         if (speaking) {
-            if (wake.addressed) bargeIn() else {
+            if (isBargeInWake(heard, name)) bargeIn() else {
                 Log.i(TAG, "drop while speaking: $heard")
                 return
             }
         }
         // A new user turn cancels any in-flight model reply still "Thinking…".
         thinkGeneration += 1
-        // After TTS, ignore loudspeaker echo. Do not accept open-window follow-ups
-        // here — that is how the robot's own reply gets treated as the user.
-        if (now < ignoreHearUntilMs) {
-            if (requireName && !wake.addressed) return
+        // Hard mute after our loudspeaker: echo often includes the wake name
+        // ("I'm Vicky…") and would reopen chat as if the user spoke.
+        if (requireName && now < ignoreHearUntilMs) {
+            Log.i(TAG, "ignore post-TTS echo: $heard")
+            return
         }
         val gate = attention.consider(heard, name, requireName, now)
         if (!gate.addressed) return
@@ -532,8 +536,8 @@ class VoiceSession(
             resume()
             return
         }
-        // Barge-in mic while talking so wake / follow-ups can interrupt.
-        scheduleListen(delayMs = 350L)
+        // Stop-only ear while talking (full chat waits until resume + echo cooldown).
+        scheduleListen(delayMs = 450L)
         // Safety valve: stop TTS then cool down.
         main.postDelayed({
             if (speaking && generation == speakGeneration) {
@@ -554,12 +558,17 @@ class VoiceSession(
         val mine = normalizeForEcho(heard)
         if (spoken.isEmpty() || mine.isEmpty()) return false
         if (spoken.contains(mine) || mine.contains(spoken.take(48))) return true
-        val heardWords = mine.split(' ').filter { it.length > 2 }.toSet()
-        val spokenWords = spoken.split(' ').filter { it.length > 2 }.toSet()
+        // Ack lines are short and often re-heard as a new motion command.
+        if (mine in MOTION_ECHO_PHRASES ||
+            (spoken in MOTION_ECHO_PHRASES && mine.contains(spoken))
+        ) {
+            return true
+        }
+        val heardWords = mine.split(' ').filter { it.length > 2 && it !in ECHO_STOPWORDS }.toSet()
+        val spokenWords = spoken.split(' ').filter { it.length > 2 && it !in ECHO_STOPWORDS }.toSet()
         if (heardWords.isEmpty()) return false
         val hit = heardWords.count { it in spokenWords }
-        // Lower threshold — short replies often share most content words with the echo.
-        return hit.toDouble() / heardWords.size >= 0.45
+        return hit.toDouble() / heardWords.size >= 0.40
     }
 
     private fun normalizeForEcho(text: String): String =
@@ -577,9 +586,19 @@ class VoiceSession(
         const val TAG = "Jiadroid"
         const val SPEAK_LIMIT_MS = 10_000L
         /** Mute after TTS so the loudspeaker is not transcribed as the user. */
-        const val ECHO_COOLDOWN_MS = 1_000L
+        const val ECHO_COOLDOWN_MS = 1_600L
         const val KB_PREFS = "jiadroid_audience_kb"
         const val KB_KEY = "notes_json"
         val NOISE = setOf("huh", "uh", "um", "ah", "hmm", "mm", "hm", "mhm", "oh", "the", "a", "an")
+        val ECHO_STOPWORDS = setOf("the", "a", "an", "i", "i'm", "im", "to", "and", "you", "me", "my")
+        val MOTION_ECHO_PHRASES = setOf(
+            "stopping",
+            "going forward",
+            "backing up",
+            "turning left",
+            "turning right",
+            "okay following",
+            "ok following",
+        )
     }
 }

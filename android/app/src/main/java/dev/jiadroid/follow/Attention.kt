@@ -43,6 +43,15 @@ fun parseAttention(heard: String, name: String): Attention {
 }
 
 /**
+ * True when the user is clearly trying to interrupt TTS ("hey Vicky…"), not when
+ * the loudspeaker said the robot's own name ("Hi! I'm Vicky…").
+ */
+fun isBargeInWake(heard: String, name: String): Boolean {
+    val wake = Regex.escape(normalizeRobotName(name))
+    return Regex("""(?i)\b(hey|hi|hello|ok|okay|yo)\s+$wake\b""").containsMatchIn(heard.trim())
+}
+
+/**
  * One wake opens a short conversation window. Call [consider] for each mic line;
  * [nowMs] is elapsed realtime (or any monotonic clock).
  */
