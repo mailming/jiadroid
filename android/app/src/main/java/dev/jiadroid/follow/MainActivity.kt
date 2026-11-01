@@ -81,8 +81,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var voice: VoiceSession
     private val talk = ArrayDeque<String>()
     private var hearing: String? = null
-    private var voiceDecision: FollowDecision? = null
-    private var voiceActionUntil = 0L
+    /**
+     * When non-null, overrides camera Follow Me (manual pad / voice drive / hold-stop).
+     * Starts in hold-stop so linking USB does not begin chasing until "follow me".
+     */
+    private var voiceDecision: FollowDecision? = VoiceAction(VoiceMotion.STOP).decision()
+    private var voiceActionUntil = Long.MAX_VALUE
     private var brainPingStarted = false
     private val lostSearch = LostSearch()
     private var manualSearch = false
@@ -273,6 +277,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 looking
             }
+            // null voiceDecision = Follow Me (only after an explicit "follow me").
             voiceDecision != null -> {
                 lostSearch.clear()
                 currentDecision(follow)
@@ -324,15 +329,16 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * A spoken move runs briefly and then latches STOP. "Follow me" explicitly
-     * hands control back to the camera follower.
+     * hands control back to the camera follower; otherwise we stay stopped.
      */
     private fun applyVoiceAction(action: VoiceAction) {
         manualSearch = false
         if (action.motion == VoiceMotion.FOLLOW) {
+            lostSearch.clear()
             voiceDecision = null
             voiceActionUntil = 0L
             lastCommandKey = null
-            // Clear any latched manual/voice drive so Follow Me can take over.
+            // Clear any latched drive so Follow Me can take over.
             send(ManualControl.stop(), force = true)
             return
         }
@@ -356,6 +362,15 @@ class MainActivity : AppCompatActivity() {
         } else {
             send(decision, force = true)
         }
+    }
+
+    /** Stay still until the user says "follow me" (or uses the Manual pad). */
+    private fun holdStop(reason: String = "Holding: stopped until Follow Me") {
+        manualSearch = false
+        lostSearch.clear()
+        voiceDecision = FollowDecision(reason, "STOP", 0f, 0f, 0f, 0f)
+        voiceActionUntil = Long.MAX_VALUE
+        lastCommandKey = null
     }
 
     /** Debug pad Search: same left / right / backup scan as auto reacquire. */
@@ -502,11 +517,9 @@ class MainActivity : AppCompatActivity() {
         if (screen != Screen.Manual &&
             (manualSearch || voiceDecision?.situation?.startsWith("Manual:") == true)
         ) {
-            manualSearch = false
-            applyManual(ManualControl.stop())
-            // Hand the body back to the camera follower after leaving the pad.
-            voiceDecision = null
-            voiceActionUntil = 0L
+            // Leave the pad in hold-stop — do not auto-resume Follow Me.
+            holdStop()
+            send(ManualControl.stop(), force = true)
         }
         binding.debugMode.visibility = android.view.View.VISIBLE
         binding.normalMode.visibility = if (screen == Screen.Eyes) android.view.View.VISIBLE else android.view.View.GONE
@@ -662,7 +675,9 @@ class MainActivity : AppCompatActivity() {
         setLinkButtonsEnabled(true)
         link.set(robot)
         hadLink = true
-        lastCommandKey = null
+        // USB/Wi‑Fi link must not start Follow Me — wait for an explicit command.
+        holdStop()
+        send(ManualControl.stop(), force = true)
         reconnectHappyUntil = SystemClock.elapsedRealtime() + 1_500L
         bumpUntil = 0L
         binding.eyes.setEmotion(Emotion.HAPPY)
