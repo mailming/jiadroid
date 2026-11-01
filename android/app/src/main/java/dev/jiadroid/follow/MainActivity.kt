@@ -83,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var hearing: String? = null
     private var voiceDecision: FollowDecision? = null
     private var voiceActionUntil = 0L
+    private var brainPingStarted = false
     private val lostSearch = LostSearch()
     private var manualSearch = false
     private var hadLink = false
@@ -469,11 +470,29 @@ class MainActivity : AppCompatActivity() {
             hideKeyboard()
         }
         voice.robotName = name
-        voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
+        val brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
+        voice.brain = brain
         binding.brainStatus.text = when {
-            voice.brain == null -> getString(R.string.brain_local)
+            brain == null -> getString(R.string.brain_local)
             key.isEmpty() -> getString(R.string.brain_need_key)
             else -> getString(R.string.brain_on, model, url)
+        }
+        // Probe the model on Use, and once on startup, so timeouts show up without chatting.
+        if (brain != null && key.isNotEmpty() && (save || !brainPingStarted)) {
+            brainPingStarted = true
+            binding.brainStatus.text = getString(R.string.brain_testing, model)
+            Thread {
+                val status = try {
+                    brain.ping()
+                } catch (error: Exception) {
+                    "failed: ${error.javaClass.simpleName}: ${error.message}"
+                }
+                Log.i(TAG, "brain ping: $status")
+                runOnUiThread {
+                    binding.brainStatus.text = getString(R.string.brain_on, model, url) + "\n" + status
+                    logTurn("Model", status)
+                }
+            }.start()
         }
     }
 

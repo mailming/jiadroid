@@ -46,5 +46,6 @@ dependencies {
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.google.mlkit:pose-detection:18.0.0-beta5")
     implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("junit:junit:4.13.2")
 }
