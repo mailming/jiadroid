@@ -188,6 +188,9 @@ static void pollUsbSession(unsigned long nowMs) {
         if (!host) {
             if (usbHostGoneMs == 0) {
                 usbHostGoneMs = nowMs;
+                // Stop immediately — do not keep last velocity during the 5 s session grace.
+                protocolHaltMotors();
+                logMsg("USB host gone — motors halted.");
             } else if (nowMs - usbHostGoneMs > 5000) {
                 // Phone USB open often glitches the host briefly around a reset.
                 dropPeer("Phone disconnected (USB).");

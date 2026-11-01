@@ -49,6 +49,7 @@ Share one ground between the ESP32, the L9110S, and the encoder plugs. Power the
 The L9110S inputs take a 3.3 V GPIO. Power the encoder boards from the ESP32's 3.3 V pin. A 5 V encoder output into a GPIO can damage the chip. Motor PWM is 1 kHz (some L9110S boards only hiss and barely move at 20 kHz).
 Non-zero wheel commands boost PWM for stall, but same-direction left/right pairs are scaled together so yaw keeps a speed difference (a flat min on both sides looked like driving straight).
 Leaving a full stop applies a short scaled `MOTOR_KICK_DUTY` pulse so Slow+ can break static friction.
+If no motion refresh arrives for `MOTION_DEADMAN_MS` (400 ms), wheels coast — the phone keepalive is shorter so healthy drive is not cut. USB host loss stops motors immediately; the session may stay open a few seconds for a glitch.
 
 | ESP32-S3 | Connects to |
 | --- | --- |

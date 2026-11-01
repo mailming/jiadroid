@@ -11,6 +11,7 @@ static volatile int32_t rightTicks = 0;
 
 static double leftCommand = 0;
 static double rightCommand = 0;
+static unsigned long lastCommandAtMs = 0;
 static int32_t leftTicksPrev = 0;
 static int32_t rightTicksPrev = 0;
 static double poseX = 0;
@@ -259,11 +260,13 @@ void chassisSetWheels(double leftRadS, double rightRadS) {
     }
     leftCommand = leftRadS;
     rightCommand = rightRadS;
+    lastCommandAtMs = millis();
 }
 
 void chassisStopMotors() {
     leftCommand = 0;
     rightCommand = 0;
+    lastCommandAtMs = millis();
     writeWheels(0, 0, millis());
 }
 
@@ -293,6 +296,13 @@ void chassisPoll(unsigned long nowMs) {
     if (nowMs - rangeCheckedMs >= 100) {
         rangeCheckedMs = nowMs;
         rangeM = readRange();
+    }
+
+    // Deadman: without a fresh motion.velocity (or stop), coast — do not latch forever.
+    if ((fabs(leftCommand) > 1e-6 || fabs(rightCommand) > 1e-6) &&
+        lastCommandAtMs != 0 &&
+        (nowMs - lastCommandAtMs) > MOTION_DEADMAN_MS) {
+        chassisStopMotors();
     }
 
     double left = leftCommand;

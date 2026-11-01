@@ -54,8 +54,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private val handler = Handler(Looper.getMainLooper())
     private val cameraExecutor = Executors.newSingleThreadExecutor()
+    /** Connect / wifi / bump / firmware — must not block emergency STOP. */
     private val io = Executors.newSingleThreadExecutor()
+    /** Motion only: coalesces to latest decision so STOP is never stuck behind walks. */
+    private val motionIo = Executors.newSingleThreadExecutor()
     private val link = AtomicReference<RobotClient?>(null)
+    private val pendingMotion = AtomicReference<FollowDecision?>(null)
+    private val motionFlushScheduled = AtomicReference(false)
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
     private var connecting = false
@@ -241,7 +246,9 @@ class MainActivity : AppCompatActivity() {
         ticking = false
         handler.removeCallbacks(tick)
         if (::voice.isInitialized) voice.stop()
-        send(decide(Scene(false, 0f, 0f)), force = true)
+        // Do not resume Follow Me / latched drive when the app returns.
+        holdStop()
+        send(ManualControl.stop(), force = true)
         super.onPause()
     }
 
@@ -254,6 +261,7 @@ class MainActivity : AppCompatActivity() {
         scanner.close()
         bodies.close()
         cameraExecutor.shutdown()
+        motionIo.shutdown()
         io.shutdown()
         super.onDestroy()
     }
@@ -597,27 +605,56 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         val key = commandKey(decision)
         val changed = key != lastCommandKey
-        val keepalive = decision.command != "STOP" && now - lastSendAt > 1000
+        // Keepalive must stay under firmware MOTION_DEADMAN_MS (400).
+        val keepalive = decision.command != "STOP" && now - lastSendAt > 150
         if (!force && !changed && !keepalive) return
         lastCommandKey = key
         lastSendAt = now
-        io.execute {
+        // Latest-wins: ticks must not queue behind a slow walk; STOP replaces pending drive.
+        pendingMotion.set(decision)
+        scheduleMotionFlush(robot)
+    }
+
+    private fun scheduleMotionFlush(robot: RobotClient) {
+        if (!motionFlushScheduled.compareAndSet(false, true)) return
+        motionIo.execute {
             try {
-                if (link.get() !== robot) return@execute
-                if (decision.command == "STOP") robot.stop() else robot.walk(decision)
-            } catch (error: RobotException) {
-                handler.post { setLinkText(error.message) }
-            } catch (error: RobotException) {
-                handler.post { setLinkText(error.message) }
-            } catch (error: Exception) {
-                handler.post { onLinkFailed(robot, error) }
+                while (true) {
+                    val decision = pendingMotion.getAndSet(null) ?: break
+                    if (link.get() !== robot) break
+                    try {
+                        if (decision.command == "STOP") robot.stop() else robot.walk(decision)
+                    } catch (error: RobotException) {
+                        handler.post { setLinkText(error.message) }
+                        if (decision.command == "STOP") {
+                            // One quick retry — wheels must not keep last velocity.
+                            try {
+                                if (link.get() === robot) robot.stop()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    } catch (error: Exception) {
+                        handler.post { onLinkFailed(robot, error) }
+                        break
+                    }
+                }
+            } finally {
+                motionFlushScheduled.set(false)
+                // A newer command may have arrived after we cleared pending but before unschedule.
+                val again = pendingMotion.get()
+                if (again != null && link.get() === robot) {
+                    scheduleMotionFlush(robot)
+                }
             }
         }
     }
 
     private fun commandKey(decision: FollowDecision): String {
         if (decision.command == "STOP") return "STOP"
-        return decision.command + ":" + (decision.headYaw * 20f).roundToInt()
+        return decision.command + ":" +
+            (decision.forward * 100f).roundToInt() + ":" +
+            (decision.yaw * 100f).roundToInt() + ":" +
+            (decision.headYaw * 20f).roundToInt()
     }
 
     private fun connectToLaptop() {

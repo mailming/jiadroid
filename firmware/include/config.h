@@ -24,6 +24,9 @@ constexpr int MIN_MOTOR_DUTY = 120;
 // Breakaway when leaving a full stop. Scaled across both wheels to keep yaw.
 constexpr int MOTOR_KICK_DUTY = 230;
 constexpr unsigned long MOTOR_KICK_MS = 250;
+// Coast if the phone stops refreshing motion (app hang / link stall).
+// Phone keepalive is ~150 ms; keep this larger so healthy drive is not cut.
+constexpr unsigned long MOTION_DEADMAN_MS = 400;
 constexpr double RANGE_MAX_M = 2.0;
 
 // Phone standing on the top plate. Matches the `top` mount in the simulator.

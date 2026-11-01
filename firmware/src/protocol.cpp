@@ -500,6 +500,10 @@ void protocolOnDisconnect() {
     stopMotion();
 }
 
+void protocolHaltMotors() {
+    stopMotion();
+}
+
 bool protocolPollTelemetry(Stream &peer, unsigned long nowMs) {
     if (!telemetryOn) {
         return true;

@@ -9,6 +9,8 @@ bool protocolSendHello(Stream &peer);
 bool protocolHandleLine(Stream &peer, const char *line);
 bool protocolPollTelemetry(Stream &peer, unsigned long nowMs);
 void protocolOnDisconnect();
+/** Zero wheels without tearing down the session (e.g. brief USB host glitch). */
+void protocolHaltMotors();
 
 // After firmware.begin, main feeds raw sketch bytes here until finished.
 bool protocolOtaActive();
