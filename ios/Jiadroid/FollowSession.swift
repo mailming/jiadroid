@@ -30,8 +30,10 @@ final class FollowSession: ObservableObject, CameraSink {
     private var talk: [String] = []
     private var hearing: String?
     private let lostSearch = LostSearch()
+    private let motionSmooth = MotionSmoother()
     private var voiceDecision: FollowDecision?
     private var voiceActionUntil = Date.distantPast
+    private var manualSearch = false
     private var hadLink = false
     private var bumpUntil = Date.distantPast
     private var reconnectHappyUntil = Date.distantPast
@@ -69,7 +71,11 @@ final class FollowSession: ObservableObject, CameraSink {
                 onTurn: { [weak self] who, text in self?.logTurn(who, text) },
                 onHearing: { [weak self] text in self?.logHearing(text) },
                 onEmotion: { [weak self] emotion in self?.voice.emotion = emotion },
-                onAction: { [weak self] action in self?.applyVoiceAction(action) }
+                onAction: { [weak self] action in self?.applyVoiceAction(action) },
+                onLookupContact: { who in ContactDialer.findInContacts(who: who) },
+                onHasContactsPermission: { ContactDialer.hasContactsPermission },
+                onPlaceCall: { number in ContactDialer.placeCall(number: number) },
+                onNeedCallPermissions: { [weak self] who in self?.requestCallPermissions(who: who) }
             )
             loadBrain(save: false)
         }
@@ -250,7 +256,7 @@ final class FollowSession: ObservableObject, CameraSink {
     }
 
     func cameraDidMeasure(_ sighting: Sighting) {
-        if sighting.subject == "Person", subject == "Marker", sim.scene.visible, Date().timeIntervalSince(lastMarkerAt) < 0.4 {
+        if sighting.subject == "Person", subject == "Marker", sim.scene.visible, Date().timeIntervalSince(lastMarkerAt) < Self.holdSeconds {
             return
         }
         if sighting.subject != subject {
@@ -282,7 +288,7 @@ final class FollowSession: ObservableObject, CameraSink {
         let now = Date()
         let dt = Float(min(0.2, now.timeIntervalSince(lastTick)))
         lastTick = now
-        let fresh = sim.scene.visible && now.timeIntervalSince(lastMarkerAt) < 0.4
+        let fresh = sim.scene.visible && now.timeIntervalSince(lastMarkerAt) < Self.holdSeconds
         let shown = fresh ? sim.scene : Scene(visible: false, angle: 0, distance: 0)
         if !fresh {
             sim.scene = shown
@@ -291,13 +297,28 @@ final class FollowSession: ObservableObject, CameraSink {
         }
         let follow = decide(shown, subject: subject)
         let tracked: FollowDecision
-        if voiceDecision != nil {
+        if manualSearch {
+            // Voice / manual Search: left → right → backup until the person is seen.
+            let looking = lostSearch.enrich(scene: shown, follow: follow, now: now, subject: subject)
+            if shown.visible || !lostSearch.searching {
+                manualSearch = false
+            }
+            tracked = looking
+        } else if voiceDecision != nil {
             lostSearch.clear()
             tracked = follow
         } else {
             tracked = lostSearch.enrich(scene: shown, follow: follow, now: now, subject: subject)
         }
-        let decision = currentDecision(tracked, now: now)
+        let raw = currentDecision(tracked, now: now)
+        // Smooth only camera Follow Me — manual / voice pulses stay crisp.
+        let decision: FollowDecision
+        if voiceDecision == nil && !manualSearch {
+            decision = motionSmooth.apply(raw)
+        } else {
+            motionSmooth.clear()
+            decision = raw
+        }
         let nextGait: Float = decision.command == "STOP" ? 0 : sim.gait + dt * 7
         if abs(sim.gait - nextGait) > 0.001 { sim.gait = nextGait }
         stepPose(&sim.pose, forward: decision.forward, lateral: decision.lateral, yaw: decision.yaw, dt: dt)
@@ -329,23 +350,48 @@ final class FollowSession: ObservableObject, CameraSink {
         send(decision, force: false)
     }
 
+    private func requestCallPermissions(who: String) {
+        ContactDialer.requestContactsAccess { [weak self] granted in
+            guard let self, granted else { return }
+            self.voiceSession?.answer("call \(who)", requireName: false)
+        }
+    }
+
     private func applyVoiceAction(_ action: VoiceAction) {
-        if action.motion == .follow {
+        switch action.motion {
+        case .follow:
+            manualSearch = false
+            lostSearch.clear()
+            motionSmooth.clear()
             voiceDecision = nil
             voiceActionUntil = .distantPast
             lastCommandKey = nil
             send(FollowDecision(situation: "Voice command: follow", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0), force: true)
-            return
+        case .search:
+            applyManualSearch()
+        default:
+            manualSearch = false
+            lostSearch.clear()
+            motionSmooth.clear()
+            let decision = action.decision()
+            voiceDecision = decision
+            voiceActionUntil = action.durationMs > 0
+                ? Date().addingTimeInterval(action.durationMs)
+                : .distantFuture
+            lastCommandKey = nil
+            // Same path as the Debug pad: push to the body immediately.
+            send(decision, force: true)
         }
-        lostSearch.clear()
-        let decision = action.decision()
-        voiceDecision = decision
-        voiceActionUntil = action.durationMs > 0
-            ? Date().addingTimeInterval(action.durationMs)
-            : .distantFuture
+    }
+
+    /// Voice / Debug Search: same left / right / backup scan as auto reacquire.
+    private func applyManualSearch() {
+        voiceDecision = nil
+        voiceActionUntil = .distantPast
+        manualSearch = true
+        motionSmooth.clear()
+        lostSearch.begin()
         lastCommandKey = nil
-        // Same path as the Debug pad: push to the body immediately.
-        send(decision, force: true)
     }
 
     private func currentDecision(_ follow: FollowDecision, now: Date) -> FollowDecision {
@@ -424,7 +470,8 @@ final class FollowSession: ObservableObject, CameraSink {
         let now = Date()
         let key = commandKey(decision)
         let changed = key != lastCommandKey
-        let keepalive = decision.command != "STOP" && now.timeIntervalSince(lastSendAt) > 1
+        // Keepalive must stay under firmware MOTION_DEADMAN_MS (800).
+        let keepalive = decision.command != "STOP" && now.timeIntervalSince(lastSendAt) > 0.2
         if !force && !changed && !keepalive { return }
         lastCommandKey = key
         lastSendAt = now
@@ -446,7 +493,8 @@ final class FollowSession: ObservableObject, CameraSink {
 
     private func commandKey(_ decision: FollowDecision) -> String {
         if decision.command == "STOP" { return "STOP" }
-        return "\(decision.command):\(Int((decision.headYaw * 20).rounded()))"
+        // Coarse buckets: fine headYaw noise must not re-issue walk every tick.
+        return "\(decision.command):\(Int((decision.forward * 40).rounded())):\(Int((decision.yaw * 40).rounded()))"
     }
 
     private func connect() {
@@ -540,7 +588,9 @@ final class FollowSession: ObservableObject, CameraSink {
         connectGeneration += 1
         let robot = swapRobot(nil)
         lastCommandKey = nil
+        manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         bumpUntil = .distantPast
         reconnectHappyUntil = .distantPast
         if hadLink { voice.emotion = .sad }
@@ -557,7 +607,9 @@ final class FollowSession: ObservableObject, CameraSink {
         guard currentRobot() === robot else { return }
         setRobot(nil)
         lastCommandKey = nil
+        manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         bumpUntil = .distantPast
         reconnectHappyUntil = .distantPast
         if hadLink { voice.emotion = .sad }
@@ -677,6 +729,9 @@ final class FollowSession: ObservableObject, CameraSink {
     }
 
     private static let talkLines = 40
+    /// Pose / QR can gap under load; keep the last sighting longer so Follow Me
+    /// does not STOP→kick stutter on brief detection drops.
+    private static let holdSeconds: TimeInterval = 0.9
     private static let prefRobotName = "robot_name"
     private static let prefBrainURL = "brain_url"
     private static let prefBrainModel = "brain_model"

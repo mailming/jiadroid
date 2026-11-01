@@ -15,9 +15,18 @@ private let shoulderShare: Float = 0.22
 private let torsoShare: Float = 0.29
 
 private let alignRad: Float = 0.28
-private let closeM: Float = 0.40
-private let slowM: Float = 0.75
+/// Start easing backward inside this range (never a hard STOP — that kick-stuttered).
+private let closeM: Float = 0.35
 private let farM: Float = 1.40
+/// Stand-off Follow Me tries to hold, in meters.
+private let targetM: Float = 0.95
+/// Duck-unit m/s per meter of (distance − target).
+private let distGain: Float = 0.12
+private let maxFollowForward: Float = 0.11
+private let maxFollowBackup: Float = -0.055
+/// Turn rate vs bearing. Keeps yaw continuous so Follow Me does not chatter at alignRad.
+private let yawGain: Float = 0.85
+private let maxFollowYaw: Float = 0.55
 
 /// Follow decisions for the phone test.
 ///
@@ -131,21 +140,98 @@ func smoothScene(previous: Scene, measured: Scene) -> Scene {
 
 func decide(_ scene: Scene, subject: String = "Marker") -> FollowDecision {
     if !scene.visible { return stopped("\(subject) is lost") }
-    if scene.distance < closeM { return stopped("\(subject) is too close") }
     let headYaw = min(0.5, max(-0.5, scene.angle))
-    if scene.angle < -alignRad {
-        return FollowDecision(situation: "\(subject) is left", command: "TURN LEFT", forward: 0.07, lateral: 0, yaw: 0.20, headYaw: headYaw)
+    // Continuous yaw — hard TURN/FORWARD flips at alignRad made the chassis stutter.
+    let yaw = min(maxFollowYaw, max(-maxFollowYaw, -scene.angle * yawGain))
+    // Continuous range keeping. A hard STOP when "too close" made catch-up feel like
+    // move→stop→kick→move; ease backward instead and glide toward targetM.
+    let rangeError = scene.distance - targetM
+    var forward = min(maxFollowForward, max(maxFollowBackup, rangeError * distGain))
+    let align = min(1, max(0, 1 - abs(scene.angle) / alignRad))
+    if forward > 0 { forward *= 0.45 + 0.55 * align }
+    let situation: String
+    if scene.distance < closeM {
+        situation = "\(subject) is too close"
+    } else if scene.angle < -alignRad {
+        situation = "\(subject) is left"
+    } else if scene.angle > alignRad {
+        situation = "\(subject) is right"
+    } else if scene.distance > farM {
+        situation = "\(subject) is too far"
+    } else {
+        situation = "\(subject) is centered"
     }
-    if scene.angle > alignRad {
-        return FollowDecision(situation: "\(subject) is right", command: "TURN RIGHT", forward: 0.07, lateral: 0, yaw: -0.20, headYaw: headYaw)
+    let command: String
+    if scene.distance < closeM || forward < -0.01 {
+        command = "BACKWARD"
+    } else if scene.angle < -alignRad {
+        command = "TURN LEFT"
+    } else if scene.angle > alignRad {
+        command = "TURN RIGHT"
+    } else if abs(forward) < 0.012 {
+        command = "HOLD"
+    } else if scene.distance < targetM {
+        command = "SLOW DOWN"
+    } else {
+        command = "FORWARD"
     }
-    if scene.distance > farM {
-        return FollowDecision(situation: "\(subject) is too far", command: "FORWARD", forward: 0.06, lateral: 0, yaw: 0, headYaw: headYaw)
+    return FollowDecision(situation: situation, command: command, forward: forward, lateral: 0, yaw: yaw, headYaw: headYaw)
+}
+
+/// Low-pass Follow Me velocities and hold-band hysteresis so stand-off noise
+/// does not zero/unzero the wheels (firmware kick made that feel like run/stop).
+final class MotionSmoother {
+    private let alpha: Float
+    private var forward: Float = 0
+    private var yaw: Float = 0
+    private var armed = false
+    private var holding = false
+
+    init(alpha: Float = 0.22) {
+        self.alpha = alpha
     }
-    if scene.distance < slowM {
-        return FollowDecision(situation: "\(subject) is centered", command: "SLOW DOWN", forward: 0.025, lateral: 0, yaw: 0, headYaw: headYaw)
+
+    func clear() {
+        forward = 0
+        yaw = 0
+        armed = false
+        holding = false
     }
-    return FollowDecision(situation: "\(subject) is centered", command: "FORWARD", forward: 0.04, lateral: 0, yaw: 0, headYaw: headYaw)
+
+    func apply(_ decision: FollowDecision) -> FollowDecision {
+        if decision.command == "STOP", decision.forward == 0, decision.yaw == 0 {
+            clear()
+            return decision
+        }
+        var targetForward = decision.forward
+        var targetYaw = decision.yaw
+        if holding {
+            if abs(targetForward) > 0.040 {
+                holding = false
+            } else {
+                targetForward = 0
+            }
+        } else if abs(targetForward) < 0.014, abs(targetYaw) < 0.18 {
+            holding = true
+            targetForward = 0
+        }
+        if !armed {
+            forward = targetForward
+            yaw = targetYaw
+            armed = true
+        } else {
+            forward += (targetForward - forward) * alpha
+            yaw += (targetYaw - yaw) * alpha
+        }
+        if holding, abs(forward) < 0.02 { forward = 0 }
+        var next = decision
+        if holding, abs(forward) < 0.01 {
+            next.command = "HOLD"
+        }
+        next.forward = forward
+        next.yaw = yaw
+        return next
+    }
 }
 
 /// When the target disappears, wait briefly then scan left, right, and reverse
@@ -157,13 +243,14 @@ final class LostSearch {
     private let searchYaw: Float
     private let searchBackup: Float
     private var lostSince: Date?
+    private var lastDrive: FollowDecision?
     private(set) var searching = false
 
     init(
-        grace: TimeInterval = 0.4,
+        grace: TimeInterval = 1.2,
         maxSearch: TimeInterval = 8,
         slice: TimeInterval = 0.5,
-        searchYaw: Float = 0.32,
+        searchYaw: Float = 0.45,
         searchBackup: Float = -0.08
     ) {
         self.grace = grace
@@ -176,16 +263,30 @@ final class LostSearch {
     func clear() {
         lostSince = nil
         searching = false
+        lastDrive = nil
+    }
+
+    /// Start scanning immediately (voice / manual Search), skipping the grace wait.
+    func begin(now: Date = Date()) {
+        lostSince = now.addingTimeInterval(-grace)
+        searching = true
     }
 
     func enrich(scene: Scene, follow: FollowDecision, now: Date = Date(), subject: String) -> FollowDecision {
         if scene.visible {
-            clear()
+            if follow.command != "STOP" { lastDrive = follow }
+            lostSince = nil
+            searching = false
             return follow
         }
         if lostSince == nil { lostSince = now }
         let lostFor = now.timeIntervalSince(lostSince ?? now)
-        if lostFor < grace || lostFor > maxSearch {
+        if lostFor < grace {
+            searching = false
+            // Keep rolling through brief pose drops instead of STOP→kick stutter.
+            return lastDrive ?? follow
+        }
+        if lostFor > maxSearch {
             searching = false
             return follow
         }
@@ -272,18 +373,22 @@ enum FollowLogicTests {
         let far = decide(Scene(visible: true, angle: 0, distance: 2))
         try expect(far.situation == "Marker is too far", "far situation")
         try expect(far.command == "FORWARD", "far command")
-        try expect(abs(far.forward - 0.06) < 0.0001, "far speed")
+        try expect(abs(far.forward - 0.11) < 0.0001, "far speed")
         try expect(abs(far.yaw) < 0.0001, "far yaw")
 
-        let near = decide(Scene(visible: true, angle: 0, distance: 0.5))
-        try expect(near.command == "SLOW DOWN", "slow command")
-        try expect(abs(near.forward - 0.05) < 0.0001, "slow speed")
+        let near = decide(Scene(visible: true, angle: 0, distance: 0.7))
+        try expect(near.forward < 0, "near backs toward stand-off")
+
+        let softLeft = decide(Scene(visible: true, angle: -0.15, distance: 1.2))
+        try expect(softLeft.yaw > 0, "soft left yaw")
+        try expect(softLeft.forward > 0, "soft left still rolls")
+        let softRight = decide(Scene(visible: true, angle: 0.15, distance: 1.2))
+        try expect(softRight.yaw < 0, "soft right yaw")
 
         let close = decide(Scene(visible: true, angle: 0, distance: 0.2))
         try expect(close.situation == "Marker is too close", "close situation")
-        try expect(close.command == "STOP", "close command")
-        try expect(abs(close.forward) < 0.0001, "close speed")
-        try expect(abs(close.headYaw) < 0.0001, "close head")
+        try expect(close.command == "BACKWARD", "close backs up")
+        try expect(close.forward < 0, "close speed")
 
         let hidden = decide(Scene(visible: false, angle: 0.4, distance: 1))
         try expect(hidden.situation == "Marker is lost", "lost situation")
@@ -363,6 +468,8 @@ enum FollowLogicTests {
         try expect(reply(heard: "", seeing: "Person is centered").say == "Yes?", "name only")
         try expect(parseVoiceAction("turn right now")?.motion == .turnRight, "voice turn")
         try expect(parseVoiceAction("follow me")?.motion == .follow, "voice follow")
+        try expect(parseVoiceAction("search")?.motion == .search, "voice search")
+        try expect(parseVoiceAction("find me")?.motion == .search, "voice find me")
         try expect(parseVoiceAction("do not turn right") == nil, "voice negation")
         try expect(
             reply(heard: "what do you see", seeing: "Person is lost") == "I don't see anyone right now.",

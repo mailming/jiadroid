@@ -10,6 +10,7 @@ package dev.jiadroid.follow
 enum class VoiceMotion {
     STOP,
     FOLLOW,
+    SEARCH,
     FORWARD,
     BACKWARD,
     TURN_LEFT,
@@ -21,6 +22,7 @@ data class VoiceAction(val motion: VoiceMotion) {
         get() = when (motion) {
             VoiceMotion.STOP -> "stopping and holding"
             VoiceMotion.FOLLOW -> "resuming Follow Me"
+            VoiceMotion.SEARCH -> "searching for you"
             VoiceMotion.FORWARD -> "moving forward briefly, then stopping"
             VoiceMotion.BACKWARD -> "moving backward briefly, then stopping"
             VoiceMotion.TURN_LEFT -> "turning left briefly, then stopping"
@@ -32,6 +34,7 @@ data class VoiceAction(val motion: VoiceMotion) {
         get() = when (motion) {
             VoiceMotion.STOP -> "Stopping."
             VoiceMotion.FOLLOW -> "Okay, following."
+            VoiceMotion.SEARCH -> "Looking for you."
             VoiceMotion.FORWARD -> "Going forward."
             VoiceMotion.BACKWARD -> "Backing up."
             VoiceMotion.TURN_LEFT -> "Turning left."
@@ -41,6 +44,7 @@ data class VoiceAction(val motion: VoiceMotion) {
     fun decision(): FollowDecision = when (motion) {
         VoiceMotion.STOP -> stopped("Voice command: stopped")
         VoiceMotion.FOLLOW -> stopped("Voice command: follow")
+        VoiceMotion.SEARCH -> stopped("Voice command: search")
         // Brief pulses need more punch than Manual hold-to-move (same L/R shape).
         VoiceMotion.FORWARD ->
             FollowDecision("Voice command: forward", "FORWARD", 0.12f, 0f, 0f, 0f)
@@ -56,7 +60,7 @@ data class VoiceAction(val motion: VoiceMotion) {
         get() = when (motion) {
             VoiceMotion.FORWARD, VoiceMotion.BACKWARD -> 1_400L
             VoiceMotion.TURN_LEFT, VoiceMotion.TURN_RIGHT -> 1_000L
-            VoiceMotion.STOP, VoiceMotion.FOLLOW -> 0L
+            VoiceMotion.STOP, VoiceMotion.FOLLOW, VoiceMotion.SEARCH -> 0L
         }
 }
 
@@ -72,6 +76,10 @@ fun parseVoiceAction(transcript: String): VoiceAction? {
             VoiceAction(VoiceMotion.STOP)
         Regex("""\b(follow me|resume following|start following|come follow)\b""").containsMatchIn(text) ->
             VoiceAction(VoiceMotion.FOLLOW)
+        Regex(
+            """\b(search|find me|look for me|go look|scan for me|where am i)\b""",
+        ).containsMatchIn(text) ->
+            VoiceAction(VoiceMotion.SEARCH)
         Regex(
             """\b((turn|rotate|spin|go|move|drive|walk|veer|head)(\s+(to(\s+the)?))?\s+left|left\s+turn|make a left)\b""",
         ).containsMatchIn(text) || text == "left" ->

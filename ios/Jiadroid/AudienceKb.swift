@@ -188,7 +188,29 @@ final class AudienceKb {
             persistLocked()
             return SpokenReply(say: "Okay, I cleared what I saved about you on this phone.", emotion: .neutral)
         }
+        if let match = firstMatch(
+            lower,
+            pattern: #"\b(?:what(?:'s| is)|whats)\s+(?:my\s+)?([a-z][a-z'’\s-]{0,40}?)(?:'s)?\s+(?:phone\s+)?number\b"#
+        ), match.count >= 2 {
+            let who = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !who.isEmpty {
+                let label = canonicalContactLabel(who)
+                if let number = notes[canonicalContactKey(who)]?.value, !number.isEmpty {
+                    return SpokenReply(say: "\(label)'s number is \(number).", emotion: .happy)
+                }
+                return SpokenReply(
+                    say: "I don't have \(label)'s number yet. Tell me \(label)'s number is …",
+                    emotion: .curious
+                )
+            }
+        }
         return nil
+    }
+
+    func contactNumber(who: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return notes[canonicalContactKey(who)]?.value
     }
 
     func noteCount() -> Int {
@@ -250,8 +272,14 @@ final class AudienceKb {
         let pet = petName(lower)
         if let pet {
             changes.append(putPinned(key: "pet-\(pet.kind)", value: pet.name, at: now))
-        } else if let match = firstMatch(lower, pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!]|$)"#),
-                  match.count >= 2 {
+        }
+
+        if let phone = parseContactNumberFact(lower) {
+            changes.append(putPinned(key: canonicalContactKey(phone.who), value: phone.number, at: now))
+        }
+
+        if pet == nil, let match = firstMatch(lower, pattern: #"(?:i have|i've got)\s+(?:a|an)\s+(.+?)(?:[.!]|$)"#),
+           match.count >= 2 {
             let value = match[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if (2...80).contains(value.count) {
                 changes.append(putAppendFact("has \(value)", at: now))
@@ -266,6 +294,10 @@ final class AudienceKb {
             if (2...120).contains(value.count) {
                 if let nested = petName(value) ?? petName("my \(value)") {
                     changes.append(putPinned(key: "pet-\(nested.kind)", value: nested.name, at: now))
+                } else if let nestedPhone = parseContactNumberFact(value) ?? parseContactNumberFact("my \(value)") {
+                    changes.append(
+                        putPinned(key: canonicalContactKey(nestedPhone.who), value: nestedPhone.number, at: now)
+                    )
                 } else {
                     changes.append(putAppendFact(value, at: now))
                 }
@@ -373,7 +405,9 @@ final class AudienceKb {
         let pattern = "\\b\(NSRegularExpression.escapedPattern(for: old))\\b"
         var staleKeys: [String] = []
         for (key, note) in notes {
-            if key == "name" || key.hasPrefix("pet-") || key.hasPrefix("favorite-") { continue }
+            if key == "name" || key.hasPrefix("pet-") || key.hasPrefix("favorite-") || key.hasPrefix("contact-") {
+                continue
+            }
             guard note.value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else {
                 continue
             }
@@ -487,7 +521,8 @@ final class AudienceKb {
     private static let petKinds: Set<String> = ["dog", "cat", "bird", "fish", "hamster", "rabbit"]
 
     private static func isPinnedKey(_ key: String) -> Bool {
-        pinnedKeys.contains(key) || key.hasPrefix("pet-") || key.hasPrefix("favorite-")
+        pinnedKeys.contains(key) || key.hasPrefix("pet-") || key.hasPrefix("favorite-") ||
+            key.hasPrefix("contact-")
     }
 
     private static func stripLeadIn(_ lower: String) -> String {

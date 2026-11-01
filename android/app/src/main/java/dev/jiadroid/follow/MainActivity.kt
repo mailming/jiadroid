@@ -46,6 +46,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -94,6 +95,7 @@ class MainActivity : AppCompatActivity() {
     private var voiceActionUntil = Long.MAX_VALUE
     private var brainPingStarted = false
     private val lostSearch = LostSearch()
+    private val motionSmooth = MotionSmoother()
     private var manualSearch = false
     private var hadLink = false
     private var bumpUntil = 0L
@@ -121,6 +123,19 @@ class MainActivity : AppCompatActivity() {
             if (ticking) voice.start()
         } else {
             binding.voiceLine.text = getString(R.string.mic_denied)
+        }
+    }
+
+    /** After the user allows Contacts / phone, retry “call <who>”. */
+    private var pendingCallWho: String? = null
+    private val requestCallPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        val who = pendingCallWho
+        pendingCallWho = null
+        if (who.isNullOrBlank() || !::voice.isInitialized) return@registerForActivityResult
+        if (grants[Manifest.permission.READ_CONTACTS] == true ||
+            grants[Manifest.permission.CALL_PHONE] == true
+        ) {
+            voice.answer("call $who", requireName = false)
         }
     }
 
@@ -197,6 +212,10 @@ class MainActivity : AppCompatActivity() {
             onHearing = ::logHearing,
             onEmotion = { binding.eyes.setEmotion(it) },
             onAction = ::applyVoiceAction,
+            onLookupContact = { who -> ContactDialer.findInContacts(this, who) },
+            onHasContactsPermission = { ContactDialer.hasContactsPermission(this) },
+            onPlaceCall = { number -> ContactDialer.placeCall(this, number) },
+            onNeedCallPermissions = ::requestCallPermissions,
         )
         binding.saySend.setOnClickListener { sayTyped() }
         binding.say.setOnEditorActionListener { _, actionId, _ ->
@@ -292,14 +311,21 @@ class MainActivity : AppCompatActivity() {
             }
             else -> currentDecision(lostSearch.enrich(scene, follow, now, subject))
         }
-        if (decision.command == "STOP") gait = 0f else gait += dt * 7f
-        stepPose(pose, decision.forward, decision.lateral, decision.yaw, dt)
+        // Smooth only camera Follow Me — manual / voice pulses stay crisp.
+        val driven = if (voiceDecision == null && !manualSearch) {
+            motionSmooth.apply(decision)
+        } else {
+            motionSmooth.clear()
+            decision
+        }
+        if (driven.command == "STOP") gait = 0f else gait += dt * 7f
+        stepPose(pose, driven.forward, driven.lateral, driven.yaw, dt)
         binding.duck.render(pose, scene, gait, hfovRad.toFloat())
-        binding.eyes.render(decision, if (scene.visible) gazeY else 0f)
-        refreshFace(decision, now)
+        binding.eyes.render(driven, if (scene.visible) gazeY else 0f)
+        refreshFace(driven, now)
         pollBump(now)
-        show(decision, scene)
-        send(decision, force = false)
+        show(driven, scene)
+        send(driven, force = false)
     }
 
     /** Eyes are the audience face — link / bump / search beat conversation mood. */
@@ -335,40 +361,67 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Ask for Contacts (and Call if useful) so “call my mom” can find them. */
+    private fun requestCallPermissions(who: String) {
+        pendingCallWho = who
+        val needed = listOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+        ).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (needed.isEmpty()) {
+            pendingCallWho = null
+            if (::voice.isInitialized) voice.answer("call $who", requireName = false)
+            return
+        }
+        requestCallPerms.launch(needed.toTypedArray())
+    }
+
     /**
      * A spoken move runs briefly and then latches STOP. "Follow me" explicitly
      * hands control back to the camera follower; otherwise we stay stopped.
      */
     private fun applyVoiceAction(action: VoiceAction) {
-        manualSearch = false
-        if (action.motion == VoiceMotion.FOLLOW) {
-            lostSearch.clear()
-            voiceDecision = null
-            voiceActionUntil = 0L
-            lastCommandKey = null
-            // Clear any latched drive so Follow Me can take over.
-            send(ManualControl.stop(), force = true)
-            return
-        }
-        lostSearch.clear()
-        val decision = action.decision()
-        val previous = voiceDecision
-        voiceDecision = decision
-        voiceActionUntil = if (action.durationMs > 0L) {
-            SystemClock.elapsedRealtime() + action.durationMs
-        } else {
-            Long.MAX_VALUE
-        }
-        lastCommandKey = null
-        // Same path as the Debug pad: push to the body immediately, don't wait
-        // for the next camera tick (voice used to miss the robot that way).
-        if (previous != null && manualNeedsCoast(previous, decision)) {
-            send(ManualControl.stop(), force = true)
-            handler.postDelayed({
-                if (voiceDecision === decision) send(decision, force = true)
-            }, 100L)
-        } else {
-            send(decision, force = true)
+        when (action.motion) {
+            VoiceMotion.FOLLOW -> {
+                manualSearch = false
+                lostSearch.clear()
+                motionSmooth.clear()
+                voiceDecision = null
+                voiceActionUntil = 0L
+                lastCommandKey = null
+                // Clear any latched drive so Follow Me can take over.
+                send(ManualControl.stop(), force = true)
+            }
+            VoiceMotion.SEARCH -> {
+                // Same path as the Debug Search pad — scan until the person is seen.
+                applyManualSearch()
+            }
+            else -> {
+                manualSearch = false
+                lostSearch.clear()
+                motionSmooth.clear()
+                val decision = action.decision()
+                val previous = voiceDecision
+                voiceDecision = decision
+                voiceActionUntil = if (action.durationMs > 0L) {
+                    SystemClock.elapsedRealtime() + action.durationMs
+                } else {
+                    Long.MAX_VALUE
+                }
+                lastCommandKey = null
+                // Same path as the Debug pad: push to the body immediately, don't wait
+                // for the next camera tick (voice used to miss the robot that way).
+                if (previous != null && manualNeedsCoast(previous, decision)) {
+                    send(ManualControl.stop(), force = true)
+                    handler.postDelayed({
+                        if (voiceDecision === decision) send(decision, force = true)
+                    }, 100L)
+                } else {
+                    send(decision, force = true)
+                }
+            }
         }
     }
 
@@ -376,6 +429,7 @@ class MainActivity : AppCompatActivity() {
     private fun holdStop(reason: String = "Holding: stopped until Follow Me") {
         manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         voiceDecision = FollowDecision(reason, "STOP", 0f, 0f, 0f, 0f)
         voiceActionUntil = Long.MAX_VALUE
         lastCommandKey = null
@@ -386,6 +440,7 @@ class MainActivity : AppCompatActivity() {
         voiceDecision = null
         voiceActionUntil = 0L
         manualSearch = true
+        motionSmooth.clear()
         lostSearch.begin(SystemClock.elapsedRealtime())
         lastCommandKey = null
     }
@@ -394,6 +449,7 @@ class MainActivity : AppCompatActivity() {
     private fun applyManual(decision: FollowDecision) {
         manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         val previous = voiceDecision
         voiceDecision = decision
         voiceActionUntil = Long.MAX_VALUE
@@ -605,8 +661,12 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.elapsedRealtime()
         val key = commandKey(decision)
         val changed = key != lastCommandKey
-        // Keepalive must stay under firmware MOTION_DEADMAN_MS (400).
-        val keepalive = decision.command != "STOP" && now - lastSendAt > 150
+        // Keepalive must stay under firmware MOTION_DEADMAN_MS (800).
+        // HOLD (zeros) needs refresh too, but not so often that we spam coast edges.
+        val idleHold = decision.command == "HOLD" &&
+            abs(decision.forward) < 0.01f && abs(decision.yaw) < 0.05f
+        val keepaliveGap = if (idleHold) 400L else 180L
+        val keepalive = decision.command != "STOP" && now - lastSendAt > keepaliveGap
         if (!force && !changed && !keepalive) return
         lastCommandKey = key
         lastSendAt = now
@@ -651,10 +711,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun commandKey(decision: FollowDecision): String {
         if (decision.command == "STOP") return "STOP"
+        // Coarse buckets: fine headYaw noise must not re-issue walk every tick.
         return decision.command + ":" +
-            (decision.forward * 100f).roundToInt() + ":" +
-            (decision.yaw * 100f).roundToInt() + ":" +
-            (decision.headYaw * 20f).roundToInt()
+            (decision.forward * 40f).roundToInt() + ":" +
+            (decision.yaw * 40f).roundToInt()
     }
 
     private fun connectToLaptop() {
@@ -851,7 +911,9 @@ class MainActivity : AppCompatActivity() {
     private fun disconnect() {
         val robot = link.getAndSet(null)
         lastCommandKey = null
+        manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         bumpUntil = 0L
         reconnectHappyUntil = 0L
         if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
@@ -876,7 +938,9 @@ class MainActivity : AppCompatActivity() {
     private fun onLinkFailed(robot: RobotClient, error: Exception) {
         if (!link.compareAndSet(robot, null)) return
         lastCommandKey = null
+        manualSearch = false
         lostSearch.clear()
+        motionSmooth.clear()
         bumpUntil = 0L
         reconnectHappyUntil = 0L
         if (hadLink) binding.eyes.setEmotion(Emotion.SAD)
@@ -1241,7 +1305,9 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "Jiadroid"
         /** Match iOS CameraSession: at most ~12.5 vision passes per second. */
         private const val SCAN_MIN_MS = 80L
-        private const val HOLD_MS = 400L
+        // Pose / QR can gap under load; keep the last sighting longer so Follow Me
+        // does not STOP→kick stutter on brief detection drops.
+        private const val HOLD_MS = 900L
         private const val BODY_LIKELIHOOD = 0.7f
         private const val SUBJECT_MARKER = "Marker"
         private const val SUBJECT_PERSON = "Person"

@@ -8,6 +8,7 @@ import Foundation
 enum VoiceMotion {
     case stop
     case follow
+    case search
     case forward
     case backward
     case turnLeft
@@ -21,6 +22,7 @@ struct VoiceAction {
         switch motion {
         case .stop: return "stopping and holding"
         case .follow: return "resuming Follow Me"
+        case .search: return "searching for you"
         case .forward: return "moving forward briefly, then stopping"
         case .backward: return "moving backward briefly, then stopping"
         case .turnLeft: return "turning left briefly, then stopping"
@@ -33,6 +35,7 @@ struct VoiceAction {
         switch motion {
         case .stop: return "Stopping."
         case .follow: return "Okay, following."
+        case .search: return "Looking for you."
         case .forward: return "Going forward."
         case .backward: return "Backing up."
         case .turnLeft: return "Turning left."
@@ -46,6 +49,8 @@ struct VoiceAction {
             return FollowDecision(situation: "Voice command: stopped", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0)
         case .follow:
             return FollowDecision(situation: "Voice command: follow", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0)
+        case .search:
+            return FollowDecision(situation: "Voice command: search", command: "STOP", forward: 0, lateral: 0, yaw: 0, headYaw: 0)
         case .forward:
             return FollowDecision(situation: "Voice command: forward", command: "FORWARD", forward: 0.04, lateral: 0, yaw: 0, headYaw: 0)
         case .backward:
@@ -62,7 +67,7 @@ struct VoiceAction {
         case .forward, .backward: return 1.4
         // Short nudge — keep the person in frame for Follow Me.
         case .turnLeft, .turnRight: return 0.22
-        case .stop, .follow: return 0
+        case .stop, .follow, .search: return 0
         }
     }
 }
@@ -80,6 +85,9 @@ func parseVoiceAction(_ transcript: String) -> VoiceAction? {
     }
     if text.range(of: #"\b(follow me|resume following|start following|come follow)\b"#, options: .regularExpression) != nil {
         return VoiceAction(motion: .follow)
+    }
+    if text.range(of: #"\b(search|find me|look for me|go look|scan for me|where am i)\b"#, options: .regularExpression) != nil {
+        return VoiceAction(motion: .search)
     }
     if text == "left" ||
         text.range(

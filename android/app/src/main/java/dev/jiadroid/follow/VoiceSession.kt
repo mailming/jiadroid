@@ -35,6 +35,14 @@ class VoiceSession(
     private val onHearing: (String) -> Unit,
     private val onEmotion: (Emotion) -> Unit,
     private val onAction: (VoiceAction) -> Unit,
+    /** Look up [who] in the phone Contacts book (null if missing or no permission). */
+    private val onLookupContact: (who: String) -> String? = { null },
+    /** True when READ_CONTACTS is already granted. */
+    private val onHasContactsPermission: () -> Boolean = { false },
+    /** Open the dialer / place a call. Returns false if the phone app could not start. */
+    private val onPlaceCall: (number: String) -> Boolean = { false },
+    /** Ask for Contacts / call permission and optionally retry [who] afterward. */
+    private val onNeedCallPermissions: (who: String) -> Unit = {},
 ) {
     /** When null, replies come from the phone's own short list. */
     @Volatile var brain: Brain? = null
@@ -147,9 +155,11 @@ class VoiceSession(
                 // commands, and "hey <name>…" — not open chat (that matches TTS).
                 if (speaking) {
                     val name = normalizeRobotName(robotName)
-                    val motion = resolveMotion(text, name, requireName = true, SystemClock.elapsedRealtime())
+                    val now = SystemClock.elapsedRealtime()
+                    val motion = resolveMotion(text, name, requireName = true, now)
+                    val call = resolveCall(text, name, requireName = true, now)
                     val stop = parseVoiceAction(text)?.motion == VoiceMotion.STOP
-                    if (stop || motion != null || isBargeInWake(text, name)) {
+                    if (stop || motion != null || call != null || isBargeInWake(text, name)) {
                         answer(text)
                     } else {
                         Log.i(TAG, "ignore loudspeaker while talking: $text")
@@ -384,6 +394,72 @@ class VoiceSession(
     }
 
     /**
+     * Phone calls while awake. Works during Thinking / TTS the same way motion does.
+     */
+    private fun resolveCall(
+        heard: String,
+        name: String,
+        requireName: Boolean,
+        now: Long,
+    ): CallRequest? {
+        if (!requireName) return parseCallRequest(heard)
+        val wake = parseAttention(heard, name)
+        val text = when {
+            wake.addressed -> wake.utterance
+            attention.isEngaged(now) -> heard
+            else -> return null
+        }
+        if (text.isBlank()) return null
+        return parseCallRequest(text) ?: parseCallRequest(heard)
+    }
+
+    private fun applyCallNow(heard: String, request: CallRequest) {
+        thinkGeneration += 1
+        thinkingInFlight = false
+        if (speaking) bargeIn()
+        ignoreHearUntilMs = 0L
+        attention.keepAlive(SystemClock.elapsedRealtime())
+        onTurn("You", heard)
+        val number = kb.contactNumber(request.who) ?: onLookupContact(request.who)
+        if (number == null) {
+            if (!onHasContactsPermission()) {
+                onNeedCallPermissions(request.who)
+                speak(
+                    SpokenReply(request.missingNumberPrompt, Emotion.CURIOUS),
+                    rememberUser = heard,
+                    userAlreadyStaged = false,
+                    briefEcho = true,
+                )
+            } else {
+                speak(
+                    SpokenReply(request.notFoundPrompt, Emotion.CURIOUS),
+                    rememberUser = heard,
+                    userAlreadyStaged = false,
+                    briefEcho = true,
+                )
+            }
+            return
+        }
+        val started = onPlaceCall(number)
+        onTurn("Action", "calling ${request.displayWho}")
+        if (started) {
+            speak(
+                SpokenReply(request.spokenAck, Emotion.EXCITED),
+                rememberUser = heard,
+                userAlreadyStaged = false,
+                briefEcho = true,
+            )
+        } else {
+            speak(
+                SpokenReply("I couldn't open the phone app.", Emotion.CONFUSED),
+                rememberUser = heard,
+                userAlreadyStaged = false,
+                briefEcho = true,
+            )
+        }
+    }
+
+    /**
      * Fire STOP from a partial transcript. Google often waits for silence before
      * finals; while Follow Me is driving that delay feels dangerous.
      */
@@ -439,6 +515,11 @@ class VoiceSession(
         // Drive commands interrupt chat Thinking / TTS so mode switches stay snappy.
         resolveMotion(heard, name, requireName, now)?.let { action ->
             applyMotionNow(heard, action)
+            return
+        }
+        // "Eva call my mom" — local dialer, same wake gate as motion.
+        resolveCall(heard, name, requireName, now)?.let { request ->
+            applyCallNow(heard, request)
             return
         }
         // During TTS only "hey <name>…" may barge into conversation (stop/motion above).
@@ -685,6 +766,8 @@ class VoiceSession(
             "turning right",
             "okay following",
             "ok following",
+            "looking for you",
+            "calling",
         )
     }
 }

@@ -139,11 +139,13 @@ class RobotClient private constructor(
             motion.put("forward", fit(decision.forward.toDouble(), DUCK_FORWARD, limits["forward"]))
             motion.put("lateral", fit(decision.lateral.toDouble(), DUCK_LATERAL, limits["lateral"]))
             motion.put("yaw", fit(decision.yaw.toDouble(), DUCK_YAW, limits["yaw"]))
-            noteSafety(request("motion.velocity", motion, 2000))
+            // Fire-and-forget: waiting on every USB round-trip left gaps that the
+            // firmware deadman treated as a coast (move / stop / move on Follow Me).
+            requestFireAndForget("motion.velocity", motion)
             if (supports("head.pose")) {
                 val head = JSONObject()
                 head.put("yaw", clamp(decision.headYaw.toDouble(), controls.getValue("head.pose")["yaw"]))
-                noteSafety(request("head.pose", head, 2000))
+                requestFireAndForget("head.pose", head)
             }
             return
         }
@@ -155,7 +157,7 @@ class RobotClient private constructor(
         body.put("head_pitch", 0.0)
         body.put("head_yaw", decision.headYaw.toDouble())
         body.put("head_roll", 0.0)
-        noteSafety(request("walk.velocity", body, 2000))
+        requestFireAndForget("walk.velocity", body)
     }
 
     fun stop() {
@@ -273,6 +275,18 @@ class RobotClient private constructor(
         } finally {
             pending.remove(id)
         }
+    }
+
+    /** Write a motion request without blocking on the response (reader drops unmatched res). */
+    private fun requestFireAndForget(op: String, body: JSONObject) {
+        if (closed.get()) throw IllegalStateException("Simulator connection closed")
+        val message = JSONObject()
+        message.put("v", 1)
+        message.put("id", ids.getAndIncrement().toString())
+        message.put("kind", "req")
+        message.put("op", op)
+        message.put("body", body)
+        write(message)
     }
 
     private fun noteSafety(body: JSONObject) {

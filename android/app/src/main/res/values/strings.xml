@@ -52,6 +52,7 @@
     <string name="eyes_description">Animated robot eyes looking toward the person</string>
     <string name="listening">Listening</string>
     <string name="mic_denied">Microphone permission is required to listen.</string>
+    <string name="contacts_help">Say “mom’s number is …” or allow Contacts so I can call people for you.</string>
     <string name="talk_empty">What you say and what it answers shows here.</string>
     <string name="say_hint">Type what you would say</string>
     <string name="say">Say</string>

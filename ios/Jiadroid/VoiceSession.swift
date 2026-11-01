@@ -22,6 +22,10 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
     private let onHearing: (String) -> Void
     private let onEmotion: (Emotion) -> Void
     private let onAction: (VoiceAction) -> Void
+    private let onLookupContact: (String) -> String?
+    private let onHasContactsPermission: () -> Bool
+    private let onPlaceCall: (String) -> Bool
+    private let onNeedCallPermissions: (String) -> Void
 
     private let audioEngine = AVAudioEngine()
     private let synthesizer = AVSpeechSynthesizer()
@@ -53,7 +57,11 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         onTurn: @escaping (String, String) -> Void,
         onHearing: @escaping (String) -> Void,
         onEmotion: @escaping (Emotion) -> Void,
-        onAction: @escaping (VoiceAction) -> Void
+        onAction: @escaping (VoiceAction) -> Void,
+        onLookupContact: @escaping (String) -> String? = { _ in nil },
+        onHasContactsPermission: @escaping () -> Bool = { false },
+        onPlaceCall: @escaping (String) -> Bool = { _ in false },
+        onNeedCallPermissions: @escaping (String) -> Void = { _ in }
     ) {
         self.seeing = seeing
         self.snapshot = snapshot
@@ -64,6 +72,10 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
         self.onHearing = onHearing
         self.onEmotion = onEmotion
         self.onAction = onAction
+        self.onLookupContact = onLookupContact
+        self.onHasContactsPermission = onHasContactsPermission
+        self.onPlaceCall = onPlaceCall
+        self.onNeedCallPermissions = onNeedCallPermissions
         super.init()
         synthesizer.delegate = self
         recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -146,6 +158,11 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
                 rememberUser: gate.utterance,
                 userAlreadyStaged: false
             )
+            return
+        }
+        // "Eva call my mom" — local dialer, same wake gate as motion.
+        if let request = parseCallRequest(gate.utterance) {
+            applyCallNow(heard: heard, request: request)
             return
         }
         attention.keepAlive(now: Date())
@@ -425,6 +442,47 @@ final class VoiceSession: NSObject, AVSpeechSynthesizerDelegate {
             rememberUser: heard,
             userAlreadyStaged: false
         )
+    }
+
+    private func applyCallNow(heard: String, request: CallRequest) {
+        thinkGeneration += 1
+        if speaking { bargeIn() }
+        ignoreHearUntil = .distantPast
+        attention.keepAlive(now: Date())
+        // "You" turn already logged by answer().
+        let number = kb.contactNumber(who: request.who) ?? onLookupContact(request.who)
+        if number == nil {
+            if !onHasContactsPermission() {
+                onNeedCallPermissions(request.who)
+                speak(
+                    SpokenReply(say: request.missingNumberPrompt, emotion: .curious),
+                    rememberUser: heard,
+                    userAlreadyStaged: false
+                )
+            } else {
+                speak(
+                    SpokenReply(say: request.notFoundPrompt, emotion: .curious),
+                    rememberUser: heard,
+                    userAlreadyStaged: false
+                )
+            }
+            return
+        }
+        let started = onPlaceCall(number!)
+        onTurn("Action", "calling \(request.displayWho)")
+        if started {
+            speak(
+                SpokenReply(say: request.spokenAck, emotion: .excited),
+                rememberUser: heard,
+                userAlreadyStaged: false
+            )
+        } else {
+            speak(
+                SpokenReply(say: "I couldn't open the phone app.", emotion: .confused),
+                rememberUser: heard,
+                userAlreadyStaged: false
+            )
+        }
     }
 
     private func bargeIn() {

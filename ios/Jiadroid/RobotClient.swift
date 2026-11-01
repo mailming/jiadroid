@@ -226,9 +226,11 @@ final class RobotClient {
                 "lateral": fit(Double(decision.lateral), Self.duckLateral, limits["lateral"]),
                 "yaw": fit(Double(decision.yaw), Self.duckYaw, limits["yaw"]),
             ]
-            noteSafety(try request("motion.velocity", body: motion))
+            // Fire-and-forget: waiting on every round-trip left gaps that the
+            // firmware deadman treated as a coast (move / stop / move on Follow Me).
+            try requestFireAndForget("motion.velocity", body: motion)
             if let head = controls["head.pose"] {
-                noteSafety(try request("head.pose", body: ["yaw": clamp(Double(decision.headYaw), head["yaw"])]))
+                try requestFireAndForget("head.pose", body: ["yaw": clamp(Double(decision.headYaw), head["yaw"])])
             }
             return
         }
@@ -241,7 +243,7 @@ final class RobotClient {
             "head_yaw": Double(decision.headYaw),
             "head_roll": 0.0,
         ]
-        noteSafety(try request("walk.velocity", body: body))
+        try requestFireAndForget("walk.velocity", body: body)
     }
 
     func stop() throws {
@@ -329,6 +331,23 @@ final class RobotClient {
             throw RobotError(code: text(error, "code"), message: reason.isEmpty ? "The robot refused the command" : reason)
         }
         return result["body"] as? [String: Any] ?? [:]
+    }
+
+    /// Write a motion request without blocking on the response (reader drops unmatched res).
+    private func requestFireAndForget(_ op: String, body: [String: Any]) throws {
+        lock.lock()
+        if closed {
+            lock.unlock()
+            throw plain("Robot connection closed")
+        }
+        let id = String(nextID)
+        nextID += 1
+        lock.unlock()
+        let message: [String: Any] = ["v": 1, "id": id, "kind": "req", "op": op, "body": body]
+        let data = try JSONSerialization.data(withJSONObject: message)
+        var line = data
+        line.append(0x0A)
+        connection.send(content: line, completion: .contentProcessed { _ in })
     }
 
     private func noteSafety(_ body: [String: Any]) {

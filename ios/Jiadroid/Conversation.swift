@@ -49,6 +49,10 @@ func reply(
     if lower.range(of: #"\b(sad|sorry|hurt|scared)\b"#, options: .regularExpression) != nil {
         return SpokenReply(say: "I'm right here with you. Want to tell me about it?", emotion: .sad)
     }
+    if parseContactNumberFact(lower) != nil ||
+        lower.range(of: #"(?:'s)?\s+(?:phone\s+)?(?:number|phone)\s+is\b"#, options: .regularExpression) != nil {
+        return SpokenReply(say: "Got it — I'll use that when you ask me to call.", emotion: .happy)
+    }
     if lower.range(
         of: #"(?:my name is|i am|i'm|call me)\s+\w+|not\s+\w+[,.]?\s+(?:it'?s|it is)\s+\w+|(?:dog|cat)'?s?\s+name\s+is\s+\w+|(?:dog|cat)\s+is\s+(?:named|called)\s+\w+"#,
         options: .regularExpression

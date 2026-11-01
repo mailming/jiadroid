@@ -58,6 +58,11 @@ fun reply(
     if (Regex("""\b(sad|sorry|hurt|scared)\b""").containsMatchIn(lower)) {
         return SpokenReply("I'm right here with you. Want to tell me about it?", Emotion.SAD)
     }
+    if (parseContactNumberFact(lower) != null ||
+        Regex("""(?:'s)?\s+(?:phone\s+)?(?:number|phone)\s+is\b""").containsMatchIn(lower)
+    ) {
+        return SpokenReply("Got it — I'll use that when you ask me to call.", Emotion.HAPPY)
+    }
     if (Regex(
             """(?:my name is|i am|i'm|call me)\s+\w+|not\s+\w+[,.]?\s+(?:it'?s|it is)\s+\w+|(?:dog|cat)'?s?\s+name\s+is\s+\w+|(?:dog|cat)\s+is\s+(?:named|called)\s+\w+""",
         ).containsMatchIn(lower)

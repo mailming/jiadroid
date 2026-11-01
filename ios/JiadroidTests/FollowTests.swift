@@ -22,6 +22,14 @@ final class FollowTests: XCTestCase {
         XCTAssertEqual(reply(heard: "hello", seeing: "Person is centered").emotion, .happy)
     }
 
+    func testCallMyMomIsRecognized() {
+        let request = parseCallRequest("eva call my mom")
+        XCTAssertEqual(request?.who, "mom")
+        XCTAssertEqual(request?.spokenAck, "Calling Mom.")
+        XCTAssertNil(parseCallRequest("call me Jia"))
+        XCTAssertEqual(parseContactNumberFact("mom's number is 555-123-4567")?.number, "5551234567")
+    }
+
     func testWakeOpensAConversationWindow() {
         let session = AttentionSession(holdSeconds: 30)
         let wake = session.consider(heard: "hey Vicky", name: "vicky", requireName: true, now: Date(timeIntervalSince1970: 1))

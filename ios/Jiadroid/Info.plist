@@ -26,6 +26,12 @@
 	<string>The camera looks for a person or the printed mini person.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>The microphone listens so the phone can answer when you talk.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Contacts let the robot call people you name, like “call my mom.”</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+	</array>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Speech recognition turns what you say into text on the phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>

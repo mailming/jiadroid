@@ -29,6 +29,8 @@ static bool leftWasDriven = false;
 static bool rightWasDriven = false;
 static unsigned long leftKickUntilMs = 0;
 static unsigned long rightKickUntilMs = 0;
+static unsigned long leftZeroSinceMs = 0;
+static unsigned long rightZeroSinceMs = 0;
 
 void IRAM_ATTR leftEncoderIsr() {
     int direction = gpio_get_level((gpio_num_t)PIN_LEFT_ENC_B) ? 1 : -1;
@@ -106,13 +108,27 @@ static void writeWheels(double leftRadS, double rightRadS, unsigned long nowMs) 
     int leftDuty = speedToDuty(leftRadS, MOTOR_INVERT_LEFT, &leftVel);
     int rightDuty = speedToDuty(rightRadS, MOTOR_INVERT_RIGHT, &rightVel);
 
+    // Delay clearing wasDriven so Follow Me stand-off zeros and one-wheel
+    // turn geometry do not re-trigger MOTOR_KICK every few hundred ms.
     if (leftDuty == 0) {
-        leftWasDriven = false;
-        leftKickUntilMs = 0;
+        if (leftZeroSinceMs == 0) {
+            leftZeroSinceMs = nowMs;
+        } else if ((nowMs - leftZeroSinceMs) >= MOTOR_KICK_REARM_MS) {
+            leftWasDriven = false;
+            leftKickUntilMs = 0;
+        }
+    } else {
+        leftZeroSinceMs = 0;
     }
     if (rightDuty == 0) {
-        rightWasDriven = false;
-        rightKickUntilMs = 0;
+        if (rightZeroSinceMs == 0) {
+            rightZeroSinceMs = nowMs;
+        } else if ((nowMs - rightZeroSinceMs) >= MOTOR_KICK_REARM_MS) {
+            rightWasDriven = false;
+            rightKickUntilMs = 0;
+        }
+    } else {
+        rightZeroSinceMs = 0;
     }
     if (leftDuty == 0 && rightDuty == 0) {
         driveChannels(kLeftAChannel, kLeftBChannel, 0, 0);

@@ -23,6 +23,9 @@ class VoiceActionTest {
         assertEquals(VoiceMotion.BACKWARD, parseVoiceAction("drive backwards")?.motion)
         assertEquals(VoiceMotion.STOP, parseVoiceAction("stop right now")?.motion)
         assertEquals(VoiceMotion.FOLLOW, parseVoiceAction("follow me")?.motion)
+        assertEquals(VoiceMotion.SEARCH, parseVoiceAction("search")?.motion)
+        assertEquals(VoiceMotion.SEARCH, parseVoiceAction("find me")?.motion)
+        assertEquals(VoiceMotion.SEARCH, parseVoiceAction("look for me")?.motion)
     }
 
     @Test

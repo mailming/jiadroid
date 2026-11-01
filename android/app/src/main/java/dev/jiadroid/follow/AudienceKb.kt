@@ -139,7 +139,28 @@ class AudienceKb(
             persist()
             return SpokenReply("Okay, I cleared what I saved about you on this phone.", Emotion.NEUTRAL)
         }
+        CONTACT_NUMBER_ASK.find(lower)?.groupValues?.getOrNull(1)?.trim()?.let { who ->
+            if (who.isNotEmpty()) {
+                val number = notes[canonicalContactKey(who)]?.value
+                val label = canonicalContactLabel(who)
+                return if (number.isNullOrBlank()) {
+                    SpokenReply(
+                        "I don't have $label's number yet. Tell me $label's number is …",
+                        Emotion.CURIOUS,
+                    )
+                } else {
+                    SpokenReply("$label's number is $number.", Emotion.HAPPY)
+                }
+            }
+        }
         return null
+    }
+
+    /** Saved phone number for a relationship / name (“mom”, “jia”, …), if any. */
+    @Synchronized
+    fun contactNumber(who: String): String? {
+        val key = canonicalContactKey(who)
+        return notes[key]?.value
     }
 
     @Synchronized
@@ -181,6 +202,10 @@ class AudienceKb(
             changes += putPinned("pet-$kind", name, now)
         }
 
+        parseContactNumberFact(lower)?.let { (who, number) ->
+            changes += putPinned(canonicalContactKey(who), number, now)
+        }
+
         // Generic "I have a …" only when it is not already captured as a named pet.
         if (petName(lower) == null) {
             HAVE.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..80 }?.let { thing ->
@@ -189,12 +214,15 @@ class AudienceKb(
         }
 
         REMEMBER.find(lower)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length in 2..120 }?.let { fact ->
-            // Prefer structured pet capture inside "remember that my dog is named X".
-            val nested = petName(fact) ?: petName("my $fact")
-            if (nested != null) {
-                changes += putPinned("pet-${nested.first}", nested.second, now)
-            } else {
-                changes += putAppendFact(fact, now)
+            // Prefer structured pet / phone capture inside "remember that …".
+            val nestedPet = petName(fact) ?: petName("my $fact")
+            val nestedPhone = parseContactNumberFact(fact) ?: parseContactNumberFact("my $fact")
+            when {
+                nestedPet != null ->
+                    changes += putPinned("pet-${nestedPet.first}", nestedPet.second, now)
+                nestedPhone != null ->
+                    changes += putPinned(canonicalContactKey(nestedPhone.first), nestedPhone.second, now)
+                else -> changes += putAppendFact(fact, now)
             }
         }
         return changes.distinctBy { it.key to it.value }
@@ -277,7 +305,11 @@ class AudienceKb(
         val pattern = Regex("""\b${Regex.escape(old)}\b""", RegexOption.IGNORE_CASE)
         val staleKeys = mutableListOf<String>()
         for ((key, note) in notes) {
-            if (key == "name" || key.startsWith("pet-") || key.startsWith("favorite-")) continue
+            if (key == "name" || key.startsWith("pet-") || key.startsWith("favorite-") ||
+                key.startsWith("contact-")
+            ) {
+                continue
+            }
             if (!pattern.containsMatchIn(note.value)) continue
             if (key == "summary") {
                 val cleaned = pattern.replace(note.value, "")
@@ -408,7 +440,12 @@ class AudienceKb(
         val PET_KINDS = setOf("dog", "cat", "bird", "fish", "hamster", "rabbit")
 
         fun isPinnedKey(key: String) =
-            key in PINNED_KEYS || key.startsWith("pet-") || key.startsWith("favorite-")
+            key in PINNED_KEYS || key.startsWith("pet-") || key.startsWith("favorite-") ||
+                key.startsWith("contact-")
+
+        val CONTACT_NUMBER_ASK = Regex(
+            """\b(?:what(?:'s| is)|whats)\s+(?:my\s+)?([a-z][a-z'’\s-]{0,40}?)(?:'s)?\s+(?:phone\s+)?number\b""",
+        )
 
         fun stripLeadIn(lower: String): String {
             var s = lower.trim()

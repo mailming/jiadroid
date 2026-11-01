@@ -21,12 +21,16 @@ constexpr double MAX_WHEEL_RAD_S = MAX_FORWARD_M_S / WHEEL_RADIUS_M;
 // Floor for a lone slow wheel. Same-direction L/R pairs scale together so a
 // turn keeps a speed difference (a flat min on both sides looked like "both forward").
 constexpr int MIN_MOTOR_DUTY = 120;
-// Breakaway when leaving a full stop. Scaled across both wheels to keep yaw.
-constexpr int MOTOR_KICK_DUTY = 230;
-constexpr unsigned long MOTOR_KICK_MS = 250;
+// Breakaway when leaving a *sustained* full stop. Scaled across both wheels.
+constexpr int MOTOR_KICK_DUTY = 200;
+constexpr unsigned long MOTOR_KICK_MS = 120;
+// Only re-arm kick after the wheel has been at zero this long. Brief zeros
+// from Follow Me stand-off / turn geometry must not surge→coast→surge.
+constexpr unsigned long MOTOR_KICK_REARM_MS = 600;
 // Coast if the phone stops refreshing motion (app hang / link stall).
-// Phone keepalive is ~150 ms; keep this larger so healthy drive is not cut.
-constexpr unsigned long MOTION_DEADMAN_MS = 400;
+// Phone keepalive is ~200 ms; leave headroom for a slow USB round-trip so
+// a healthy walk is not coasted mid-move (that felt like Follow Me stutter).
+constexpr unsigned long MOTION_DEADMAN_MS = 800;
 constexpr double RANGE_MAX_M = 2.0;
 
 // Phone standing on the top plate. Matches the `top` mount in the simulator.

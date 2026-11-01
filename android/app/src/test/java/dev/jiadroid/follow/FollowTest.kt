@@ -31,24 +31,57 @@ class FollowTest {
         val decision = decide(Scene(true, 0f, 2f))
         assertEquals("Marker is too far", decision.situation)
         assertEquals("FORWARD", decision.command)
-        assertEquals(0.06f, decision.forward, 0.0001f)
+        assertEquals(0.11f, decision.forward, 0.0001f)
         assertEquals(0f, decision.yaw, 0.0001f)
     }
 
     @Test
-    fun centeredAndNearSlowsDown() {
-        val decision = decide(Scene(true, 0f, 0.5f))
-        assertEquals("SLOW DOWN", decision.command)
-        assertEquals(0.025f, decision.forward, 0.0001f)
+    fun closerThanTargetEasesInWithoutStopping() {
+        val decision = decide(Scene(true, 0f, 0.7f))
+        assertTrue(decision.forward < 0f)
+        assertTrue(decision.command == "BACKWARD" || decision.command == "SLOW DOWN")
     }
 
     @Test
-    fun tooCloseStops() {
+    fun offCenterKeepsProportionalYawInsteadOfHardFlip() {
+        val left = decide(Scene(true, -0.15f, 1.2f))
+        assertTrue(left.command == "FORWARD" || left.command == "SLOW DOWN" || left.command == "HOLD")
+        assertTrue(left.yaw > 0f)
+        assertTrue(left.forward > 0f)
+        val right = decide(Scene(true, 0.15f, 1.2f))
+        assertTrue(right.yaw < 0f)
+    }
+
+    @Test
+    fun tooCloseBacksUpInsteadOfHardStop() {
         val decision = decide(Scene(true, 0f, 0.2f))
         assertEquals("Marker is too close", decision.situation)
-        assertEquals("STOP", decision.command)
-        assertEquals(0f, decision.forward, 0.0001f)
-        assertEquals(0f, decision.headYaw, 0.0001f)
+        assertEquals("BACKWARD", decision.command)
+        assertTrue(decision.forward < 0f)
+    }
+
+    @Test
+    fun motionSmootherBlendsVelocityChanges() {
+        val smooth = MotionSmoother(alpha = 0.5f)
+        val first = smooth.apply(FollowDecision("a", "FORWARD", 0.10f, 0f, 0f, 0f))
+        assertEquals(0.10f, first.forward, 0.0001f)
+        val second = smooth.apply(FollowDecision("b", "FORWARD", 0.08f, 0f, 0f, 0f))
+        assertEquals(0.09f, second.forward, 0.0001f)
+    }
+
+    @Test
+    fun motionSmootherHoldsNearStandOff() {
+        val smooth = MotionSmoother(alpha = 1f)
+        smooth.apply(FollowDecision("a", "FORWARD", 0.10f, 0f, 0f, 0f))
+        val hold = smooth.apply(FollowDecision("b", "HOLD", 0.005f, 0f, 0.05f, 0f))
+        assertEquals("HOLD", hold.command)
+        assertEquals(0f, hold.forward, 0.0001f)
+        // Still in band — stay held.
+        val still = smooth.apply(FollowDecision("c", "FORWARD", 0.02f, 0f, 0.05f, 0f))
+        assertEquals(0f, still.forward, 0.0001f)
+        // Clear leave — resume.
+        val go = smooth.apply(FollowDecision("d", "FORWARD", 0.06f, 0f, 0f, 0f))
+        assertEquals(0.06f, go.forward, 0.0001f)
     }
 
     @Test
