@@ -26,6 +26,12 @@ class EmotionTest {
     }
 
     @Test
+    fun completeSpokenReplyNeedsEmotionTag() {
+        assertEquals(false, isCompleteSpokenReply("Hello friend"))
+        assertEquals(true, isCompleteSpokenReply("Hello friend <<happy>>"))
+    }
+
+    @Test
     fun localGreetingIsHappy() {
         val spoken = reply("hello", "Person is centered")
         assertEquals(Emotion.HAPPY, spoken.emotion)

@@ -21,7 +21,10 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var scene = Scene(false, 0f, 0f)
     private var gait = 0f
     private var hfov = (70.0 * PI / 180.0).toFloat()
-    private val trail = ArrayList<PointF>()
+    private val trailX = FloatArray(TRAIL_CAP)
+    private val trailY = FloatArray(TRAIL_CAP)
+    private var trailCount = 0
+    private var trailStart = 0
 
     private val gridPaint = stroke(R.color.grid, 2f)
     private val conePaint = fill(R.color.cone)
@@ -34,6 +37,12 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val labelPaint = text(R.color.muted, 28f)
     private val personText = text(R.color.person, 28f).apply { textAlign = Paint.Align.CENTER }
 
+    private val scratch = PointF()
+    private val conePath = Path()
+    private val trailPath = Path()
+    private val duckPath = Path()
+    private val beakPath = Path()
+
     private var originX = 0f
     private var originY = 0f
     private var pxPerM = 1f
@@ -45,9 +54,15 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         this.scene = scene
         this.gait = gait
         this.hfov = hfovRad
-        trail.add(PointF(pose.x, pose.y))
-        if (trail.size > 80) trail.removeAt(0)
-        invalidate()
+        val slot = (trailStart + trailCount) % TRAIL_CAP
+        if (trailCount < TRAIL_CAP) {
+            trailCount++
+        } else {
+            trailStart = (trailStart + 1) % TRAIL_CAP
+        }
+        trailX[slot] = pose.x
+        trailY[slot] = pose.y
+        if (visibility == VISIBLE) invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -70,16 +85,20 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val spacing = 0.25f
         var x = floor((poseX - 3f) / spacing) * spacing
         while (x <= poseX + 3f) {
-            val start = worldToScreen(x, poseY - 3f)
-            val end = worldToScreen(x, poseY + 3f)
-            canvas.drawLine(start.x, start.y, end.x, end.y, gridPaint)
+            worldToScreen(x, poseY - 3f, scratch)
+            val x0 = scratch.x
+            val y0 = scratch.y
+            worldToScreen(x, poseY + 3f, scratch)
+            canvas.drawLine(x0, y0, scratch.x, scratch.y, gridPaint)
             x += spacing
         }
         var y = floor((poseY - 3f) / spacing) * spacing
         while (y <= poseY + 3f) {
-            val start = worldToScreen(poseX - 3f, y)
-            val end = worldToScreen(poseX + 3f, y)
-            canvas.drawLine(start.x, start.y, end.x, end.y, gridPaint)
+            worldToScreen(poseX - 3f, y, scratch)
+            val x0 = scratch.x
+            val y0 = scratch.y
+            worldToScreen(poseX + 3f, y, scratch)
+            canvas.drawLine(x0, y0, scratch.x, scratch.y, gridPaint)
             y += spacing
         }
     }
@@ -87,78 +106,86 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private fun drawCone(canvas: Canvas) {
         val span = hfov / 2f
         val reach = 1.55f
-        val origin = duckPoint(0f, 0f)
-        val left = duckPoint(cos(span) * reach, -sin(span) * reach)
-        val right = duckPoint(cos(span) * reach, sin(span) * reach)
-        val path = Path()
-        path.moveTo(origin.x, origin.y)
-        path.lineTo(left.x, left.y)
-        path.lineTo(right.x, right.y)
-        path.close()
-        canvas.drawPath(path, conePaint)
+        duckPoint(0f, 0f, scratch)
+        val ox = scratch.x
+        val oy = scratch.y
+        duckPoint(cos(span) * reach, -sin(span) * reach, scratch)
+        val lx = scratch.x
+        val ly = scratch.y
+        duckPoint(cos(span) * reach, sin(span) * reach, scratch)
+        conePath.reset()
+        conePath.moveTo(ox, oy)
+        conePath.lineTo(lx, ly)
+        conePath.lineTo(scratch.x, scratch.y)
+        conePath.close()
+        canvas.drawPath(conePath, conePaint)
     }
 
     private fun drawTrail(canvas: Canvas) {
-        if (trail.size < 2) return
-        val path = Path()
-        trail.forEachIndexed { index, point ->
-            val screen = worldToScreen(point.x, point.y)
-            if (index == 0) path.moveTo(screen.x, screen.y) else path.lineTo(screen.x, screen.y)
+        if (trailCount < 2) return
+        trailPath.reset()
+        for (i in 0 until trailCount) {
+            val index = (trailStart + i) % TRAIL_CAP
+            worldToScreen(trailX[index], trailY[index], scratch)
+            if (i == 0) trailPath.moveTo(scratch.x, scratch.y) else trailPath.lineTo(scratch.x, scratch.y)
         }
-        canvas.drawPath(path, trailPaint)
+        canvas.drawPath(trailPath, trailPaint)
     }
 
     private fun drawMarker(canvas: Canvas) {
         if (!scene.visible) return
         val reach = scene.distance.coerceAtMost(1.55f)
-        val point = duckPoint(cos(scene.angle) * reach, sin(scene.angle) * reach)
-        canvas.drawCircle(point.x, point.y, 12f, personPaint)
-        canvas.drawText("target", point.x, point.y - 18f, personText)
+        duckPoint(cos(scene.angle) * reach, sin(scene.angle) * reach, scratch)
+        canvas.drawCircle(scratch.x, scratch.y, 12f, personPaint)
+        canvas.drawText("target", scratch.x, scratch.y - 18f, personText)
     }
 
     private fun drawDuck(canvas: Canvas) {
         val step = 7f * sin(gait)
         val body = listOf(-16f to -12f, 4f to -14f, 8f to 0f, 4f to 14f, -16f to 12f)
-        val path = Path()
+        duckPath.reset()
         body.forEachIndexed { index, (forward, left) ->
-            val point = local(forward, left)
-            if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+            local(forward, left, scratch)
+            if (index == 0) duckPath.moveTo(scratch.x, scratch.y) else duckPath.lineTo(scratch.x, scratch.y)
         }
-        path.close()
-        canvas.drawPath(path, duckPaint)
+        duckPath.close()
+        canvas.drawPath(duckPath, duckPaint)
         foot(canvas, -4f + step, 12f)
         foot(canvas, -4f - step, -12f)
-        val head = local(16f, 0f)
-        canvas.drawCircle(head.x, head.y, 9f, duckPaint)
-        val beak = Path()
-        listOf(local(22f, -3f), local(30f, 0f), local(22f, 3f)).forEachIndexed { index, point ->
-            if (index == 0) beak.moveTo(point.x, point.y) else beak.lineTo(point.x, point.y)
-        }
-        beak.close()
-        canvas.drawPath(beak, beakPaint)
-        val eye = local(18f, 4f)
-        canvas.drawCircle(eye.x, eye.y, 1.6f, inkPaint)
+        local(16f, 0f, scratch)
+        canvas.drawCircle(scratch.x, scratch.y, 9f, duckPaint)
+        beakPath.reset()
+        local(22f, -3f, scratch)
+        beakPath.moveTo(scratch.x, scratch.y)
+        local(30f, 0f, scratch)
+        beakPath.lineTo(scratch.x, scratch.y)
+        local(22f, 3f, scratch)
+        beakPath.lineTo(scratch.x, scratch.y)
+        beakPath.close()
+        canvas.drawPath(beakPath, beakPaint)
+        local(18f, 4f, scratch)
+        canvas.drawCircle(scratch.x, scratch.y, 1.6f, inkPaint)
     }
 
     private fun foot(canvas: Canvas, forward: Float, side: Float) {
-        val center = local(forward, side)
-        canvas.drawOval(center.x - 5f, center.y - 3f, center.x + 5f, center.y + 3f, beakPaint)
+        local(forward, side, scratch)
+        canvas.drawOval(scratch.x - 5f, scratch.y - 3f, scratch.x + 5f, scratch.y + 3f, beakPaint)
     }
 
-    private fun worldToScreen(wx: Float, wy: Float): PointF {
+    private fun worldToScreen(wx: Float, wy: Float, out: PointF) {
         val dx = wx - poseX
         val dy = wy - poseY
         val ahead = dx * cos(heading) + dy * sin(heading)
         val side = dx * sin(heading) - dy * cos(heading)
-        return duckPoint(ahead, side)
+        duckPoint(ahead, side, out)
     }
 
-    private fun duckPoint(ahead: Float, side: Float): PointF {
-        return PointF(originX + side * pxPerM, originY - ahead * pxPerM)
+    private fun duckPoint(ahead: Float, side: Float, out: PointF) {
+        out.set(originX + side * pxPerM, originY - ahead * pxPerM)
     }
 
-    private fun local(forward: Float, left: Float): PointF {
-        return PointF(originX - left, originY - forward)
+    private fun local(forward: Float, left: Float, out: PointF) {
+        out.set(originX - left, originY - forward)
     }
 
     private fun fill(color: Int) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -175,5 +202,9 @@ class DuckView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private fun text(color: Int, size: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = ContextCompat.getColor(context, color)
         textSize = size
+    }
+
+    companion object {
+        private const val TRAIL_CAP = 80
     }
 }

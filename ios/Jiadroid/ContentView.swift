@@ -18,7 +18,10 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear { session.start() }
+        .onAppear {
+            session.presentEyes = { showDebug = false }
+            session.start()
+        }
         .onDisappear { session.stop() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -98,6 +101,24 @@ private struct EyesScreen: View {
                         .frame(minWidth: 140, minHeight: 56)
                 }
                 Spacer()
+                if let result = voice.visionResult, !result.isEmpty {
+                    Text(result)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(6)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .background(Color(red: 1, green: 0.957, blue: 0.824).opacity(0.92))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.ink.opacity(0.6), lineWidth: 2)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 12)
+                }
                 Text(voice.line)
                     .font(.body)
                     .foregroundStyle(Color.ink)
@@ -497,6 +518,10 @@ private struct BrainSection: View {
 private struct CameraPreview: UIViewRepresentable {
     let session: CameraSession
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session.session
@@ -508,10 +533,20 @@ private struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.previewLayer.session = session.session
+        if uiView.previewLayer.session !== session.session {
+            uiView.previewLayer.session = session.session
+        }
         let orientation = uiView.window?.windowScene?.interfaceOrientation ?? .landscapeRight
-        session.align(to: orientation)
-        session.alignPreview(uiView.previewLayer.connection)
+        // SwiftUI redraws this view at the follow tick rate; only realign on rotation.
+        if context.coordinator.lastOrientation != orientation {
+            context.coordinator.lastOrientation = orientation
+            session.align(to: orientation)
+            session.alignPreview(uiView.previewLayer.connection)
+        }
+    }
+
+    final class Coordinator {
+        var lastOrientation: UIInterfaceOrientation?
     }
 }
 

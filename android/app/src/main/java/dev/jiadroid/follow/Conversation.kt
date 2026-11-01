@@ -20,6 +20,11 @@ fun reply(
     kb?.recallReply(said)?.let { return it }
     memory?.recallReply(said)?.let { return it }
     val lower = said.lowercase()
+    if (Regex("""\b(can you hear me|are you listening|do you hear me|hear me)\b""")
+            .containsMatchIn(lower)
+    ) {
+        return SpokenReply("Yes — I hear you loud and clear!", Emotion.HAPPY)
+    }
     if (Regex("""\b(hi|hello|hey)\b""").containsMatchIn(lower)) {
         val known = kb?.noteCount()?.let { it > 0 } == true || memory?.chatTurns()?.isNotEmpty() == true
         return if (known) {
@@ -66,4 +71,14 @@ fun reply(
         return SpokenReply("Nice! I'll remember you like that.", Emotion.HAPPY)
     }
     return SpokenReply("I heard you say $said. Tell me more!", Emotion.CURIOUS)
+}
+
+/** Simple check-ins answered on-device so a cloud glitch cannot stall them. */
+fun isQuickLocalChat(heard: String): Boolean {
+    val lower = heard.trim().lowercase()
+    if (lower.isEmpty()) return false
+    return Regex(
+        """\b(can you hear me|are you listening|do you hear me|hear me)\b""",
+    ).containsMatchIn(lower) ||
+        Regex("""^\s*(hi|hello|hey)\s*!?\s*$""").containsMatchIn(lower)
 }

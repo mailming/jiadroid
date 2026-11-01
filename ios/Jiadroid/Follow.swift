@@ -372,6 +372,11 @@ enum FollowLogicTests {
             reply(heard: "what are you looking at", seeing: "Person is left") == "I see someone. Person is left.",
             "seen person"
         )
+        try expect(wantsCameraLook("look at this"), "vision look")
+        try expect(wantsCameraLook("solve this"), "vision solve")
+        try expect(wantsCameraLook("what's on the screen"), "vision screen")
+        try expect(!wantsCameraLook("what are you looking at"), "follow sight not vision")
+        try expect(!wantsCameraLook("what do you see"), "see not vision")
     }
 
     private static func expect(_ condition: Bool, _ message: String) throws {

@@ -26,6 +26,17 @@ data class SpokenReply(val say: String, val emotion: Emotion)
  * Pull a trailing `<<happy>>` (or similar) tag off model text so TTS stays clean.
  * Also accepts a one-line JSON object `{"say":"...","emotion":"happy"}`.
  */
+/** True once streamed model text includes a trailing emotion tag (or JSON say). */
+fun isCompleteSpokenReply(raw: String): Boolean {
+    val text = raw.trim()
+    if (text.isEmpty()) return false
+    if (text.startsWith("{")) {
+        val say = (jsonStringField(text, "say") ?: jsonStringField(text, "text")).orEmpty().trim()
+        return say.isNotEmpty() && text.contains("}")
+    }
+    return EMOTION_TAG.find(text) != null
+}
+
 fun parseSpokenReply(raw: String, fallback: Emotion = Emotion.NEUTRAL): SpokenReply {
     val text = raw.trim()
     if (text.isEmpty()) return SpokenReply("Yes?", fallback)
@@ -36,7 +47,7 @@ fun parseSpokenReply(raw: String, fallback: Emotion = Emotion.NEUTRAL): SpokenRe
             return SpokenReply(say, Emotion.parse(jsonStringField(text, "emotion")))
         }
     }
-    val tagged = Regex("""<<\s*([a-zA-Z_]+)\s*>>\s*$""").find(text)
+    val tagged = EMOTION_TAG.find(text)
     if (tagged != null) {
         val emotion = Emotion.parse(tagged.groupValues[1])
         val say = text.removeRange(tagged.range).trim()
@@ -45,7 +56,9 @@ fun parseSpokenReply(raw: String, fallback: Emotion = Emotion.NEUTRAL): SpokenRe
     return SpokenReply(text, fallback)
 }
 
-private fun jsonStringField(json: String, key: String): String? {
+private val EMOTION_TAG = Regex("""<<\s*([a-zA-Z_]+)\s*>>\s*$""")
+
+internal fun jsonStringField(json: String, key: String): String? {
     val match = Regex(""""$key"\s*:\s*"((?:\\.|[^"\\])*)"""").find(json) ?: return null
     return match.groupValues[1]
         .replace("\\\"", "\"")

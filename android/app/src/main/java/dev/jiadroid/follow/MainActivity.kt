@@ -21,6 +21,9 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -39,7 +42,9 @@ import com.google.mlkit.vision.pose.PoseLandmark
 import com.google.mlkit.vision.pose.defaults.PoseDetectorOptions
 import dev.jiadroid.follow.databinding.ActivityMainBinding
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.atan
 import kotlin.math.hypot
@@ -52,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val link = AtomicReference<RobotClient?>(null)
     private var cameraProvider: ProcessCameraProvider? = null
+    private var imageCapture: ImageCapture? = null
     private var connecting = false
     private var ticking = false
     private var lastTickNs = 0L
@@ -77,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     private var hearing: String? = null
     private var voiceDecision: FollowDecision? = null
     private var voiceActionUntil = 0L
+    private var brainPingStarted = false
     private val lostSearch = LostSearch()
     private var manualSearch = false
     private var hadLink = false
@@ -84,6 +91,12 @@ class MainActivity : AppCompatActivity() {
     private var reconnectHappyUntil = 0L
     private var lastBumpPollAt = 0L
     private var bumpPolling = false
+    private var lastScanAt = 0L
+    @Volatile private var scanning = false
+    private var lastShownSituation = ""
+    private var lastShownCommand = ""
+    private var lastShownDetail = ""
+    private var lastShownMoving: Boolean? = null
 
     private val scanner: BarcodeScanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build(),
@@ -167,6 +180,9 @@ class MainActivity : AppCompatActivity() {
         voice = VoiceSession(
             this,
             seeing = { situationText },
+            snapshot = ::captureVisionJpeg,
+            onShowEyes = { showScreen(Screen.Eyes) },
+            onVisionResult = ::showVisionResult,
             onLine = { binding.voiceLine.text = it },
             onTurn = ::logTurn,
             onHearing = ::logHearing,
@@ -229,6 +245,7 @@ class MainActivity : AppCompatActivity() {
         val robot = link.getAndSet(null)
         if (robot != null) release(robot)
         cameraProvider?.unbindAll()
+        imageCapture = null
         if (::voice.isInitialized) voice.destroy()
         scanner.close()
         bodies.close()
@@ -453,11 +470,29 @@ class MainActivity : AppCompatActivity() {
             hideKeyboard()
         }
         voice.robotName = name
-        voice.brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
+        val brain = if (url.isEmpty() || model.isEmpty()) null else Brain(url, model, key)
+        voice.brain = brain
         binding.brainStatus.text = when {
-            voice.brain == null -> getString(R.string.brain_local)
+            brain == null -> getString(R.string.brain_local)
             key.isEmpty() -> getString(R.string.brain_need_key)
             else -> getString(R.string.brain_on, model, url)
+        }
+        // Probe the model on Use, and once on startup, so timeouts show up without chatting.
+        if (brain != null && key.isNotEmpty() && (save || !brainPingStarted)) {
+            brainPingStarted = true
+            binding.brainStatus.text = getString(R.string.brain_testing, model)
+            Thread {
+                val status = try {
+                    brain.ping()
+                } catch (error: Exception) {
+                    "failed: ${error.javaClass.simpleName}: ${error.message}"
+                }
+                Log.i(TAG, "brain ping: $status")
+                runOnUiThread {
+                    binding.brainStatus.text = getString(R.string.brain_on, model, url) + "\n" + status
+                    logTurn("Model", status)
+                }
+            }.start()
         }
     }
 
@@ -495,12 +530,36 @@ class MainActivity : AppCompatActivity() {
         binding.manualLink.text = text
     }
 
+    /** Big answer card on the eyes (front) screen for back-camera vision solves. */
+    private fun showVisionResult(text: String?) {
+        if (text.isNullOrBlank()) {
+            binding.visionResult.visibility = android.view.View.GONE
+            binding.visionResult.text = ""
+            return
+        }
+        binding.visionResult.text = text
+        binding.visionResult.visibility = android.view.View.VISIBLE
+        binding.voiceLine.text = text
+    }
+
     private fun show(decision: FollowDecision, scene: Scene) {
         val moving = decision.command != "STOP"
         situationText = decision.situation
-        binding.situation.text = decision.situation
-        binding.command.text = decision.command
-        binding.command.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
+        if (decision.situation != lastShownSituation) {
+            lastShownSituation = decision.situation
+            binding.situation.text = decision.situation
+        }
+        if (decision.command != lastShownCommand) {
+            lastShownCommand = decision.command
+            binding.command.text = decision.command
+            binding.manualCommand.text = decision.command
+        }
+        if (lastShownMoving != moving) {
+            lastShownMoving = moving
+            val color = ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop)
+            binding.command.setTextColor(color)
+            binding.manualCommand.setTextColor(color)
+        }
         val range = if (scene.visible) String.format(Locale.US, "%.2f m", scene.distance) else "nothing seen"
         val robot = link.get()
         val where = if (robot == null) "phone sim" else robot.safety
@@ -513,10 +572,11 @@ class MainActivity : AppCompatActivity() {
             range,
             where,
         )
-        binding.detail.text = detail
-        binding.manualCommand.text = decision.command
-        binding.manualCommand.setTextColor(ContextCompat.getColor(this, if (moving) R.color.go else R.color.stop))
-        binding.manualDetail.text = detail
+        if (detail != lastShownDetail) {
+            lastShownDetail = detail
+            binding.detail.text = detail
+            binding.manualDetail.text = detail
+        }
     }
 
     private fun send(decision: FollowDecision, force: Boolean) {
@@ -841,11 +901,82 @@ class MainActivity : AppCompatActivity() {
         analysis.setAnalyzer(cameraExecutor, ::analyze)
         try {
             provider.unbindAll()
-            val camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
+            imageCapture = null
+            val camera = provider.bindToLifecycle(
+                this,
+                CameraSelector.DEFAULT_FRONT_CAMERA,
+                preview,
+                analysis,
+            )
             readHfov(camera)
         } catch (error: Exception) {
+            imageCapture = null
             binding.situation.text = error.message ?: getString(R.string.no_front_camera)
             Log.i(TAG, "camera bind failed", error)
+        }
+    }
+
+    /**
+     * Blocks briefly for a **back-camera** JPEG used by vision chat.
+     * Front follow camera is restored afterward. Call off the main thread.
+     */
+    private fun captureVisionJpeg(): ByteArray? {
+        val provider = cameraProvider ?: return null
+        if (!provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
+            Log.i(TAG, "no back camera for vision")
+            return null
+        }
+        val latch = CountDownLatch(1)
+        val holder = AtomicReference<ByteArray?>(null)
+        handler.post {
+            try {
+                provider.unbindAll()
+                imageCapture = null
+                val capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                imageCapture = capture
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, capture)
+                capture.takePicture(
+                    cameraExecutor,
+                    object : ImageCapture.OnImageCapturedCallback() {
+                        override fun onCaptureSuccess(image: ImageProxy) {
+                            try {
+                                val buffer = image.planes[0].buffer
+                                val bytes = ByteArray(buffer.remaining())
+                                buffer.get(bytes)
+                                holder.set(prepareVisionJpeg(bytes))
+                            } finally {
+                                image.close()
+                                restoreFrontCamera(provider, latch)
+                            }
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.i(TAG, "back vision capture failed: ${exception.message}")
+                            restoreFrontCamera(provider, latch)
+                        }
+                    },
+                )
+            } catch (error: Exception) {
+                Log.i(TAG, "back vision bind failed", error)
+                restoreFrontCamera(provider, latch)
+            }
+        }
+        return if (latch.await(6, TimeUnit.SECONDS)) holder.get() else {
+            handler.post { cameraProvider?.let { bindCamera(it) } }
+            null
+        }
+    }
+
+    private fun restoreFrontCamera(provider: ProcessCameraProvider, latch: CountDownLatch) {
+        handler.post {
+            try {
+                imageCapture = null
+                bindCamera(provider)
+            } finally {
+                latch.countDown()
+            }
         }
     }
 
@@ -855,6 +986,13 @@ class MainActivity : AppCompatActivity() {
             image.close()
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        if (scanning || now - lastScanAt < SCAN_MIN_MS) {
+            image.close()
+            return
+        }
+        lastScanAt = now
+        scanning = true
         val rotation = image.imageInfo.rotationDegrees
         val uprightWidth = if (rotation == 90 || rotation == 270) image.height else image.width
         val uprightHeight = if (rotation == 90 || rotation == 270) image.width else image.height
@@ -884,8 +1022,12 @@ class MainActivity : AppCompatActivity() {
                         null
                     }
                 }
-                .addOnCompleteListener { image.close() }
+                .addOnCompleteListener {
+                    scanning = false
+                    image.close()
+                }
         } catch (error: Exception) {
+            scanning = false
             image.close()
             Log.i(TAG, "marker scan failed", error)
         }
@@ -904,12 +1046,14 @@ class MainActivity : AppCompatActivity() {
         )
         hfovRad = hfovFor(rotation, imageWidth, imageHeight)
         val measured = measure(centerX, widthPx, imageWidth, hfovRad, markerWidthM())
-        Log.i(
-            TAG,
-            "marker ${"%.0f".format(Locale.US, widthPx)}px in ${imageWidth}x$imageHeight " +
-                "rot=$rotation fov=${"%.0f".format(Locale.US, Math.toDegrees(hfovRad))} " +
-                "mm=${"%.0f".format(Locale.US, markerWidthM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
-        )
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(
+                TAG,
+                "marker ${"%.0f".format(Locale.US, widthPx)}px in ${imageWidth}x$imageHeight " +
+                    "rot=$rotation fov=${"%.0f".format(Locale.US, Math.toDegrees(hfovRad))} " +
+                    "mm=${"%.0f".format(Locale.US, markerWidthM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+            )
+        }
         accept(measured, SUBJECT_MARKER, placed, imageWidth, imageHeight)
     }
 
@@ -930,12 +1074,14 @@ class MainActivity : AppCompatActivity() {
         }
         hfovRad = hfovFor(rotation, imageWidth, imageHeight)
         val measured = measurePerson(leftShoulder to rightShoulder, hips, imageWidth, hfovRad, personHeightM())
-        Log.i(
-            TAG,
-            "person shoulders ${"%.0f".format(Locale.US, leftShoulder.distanceTo(rightShoulder))}px " +
-                "hips=${hips != null} in ${imageWidth}x$imageHeight " +
-                "mm=${"%.0f".format(Locale.US, personHeightM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
-        )
+        if (Log.isLoggable(TAG, Log.DEBUG)) {
+            Log.d(
+                TAG,
+                "person shoulders ${"%.0f".format(Locale.US, leftShoulder.distanceTo(rightShoulder))}px " +
+                    "hips=${hips != null} in ${imageWidth}x$imageHeight " +
+                    "mm=${"%.0f".format(Locale.US, personHeightM() * 1000f)} dist=${"%.2f".format(Locale.US, measured.distance)}",
+            )
+        }
         val shoulderWidth = leftShoulder.distanceTo(rightShoulder)
         val lowLeft = leftHip ?: Point(leftShoulder.x, leftShoulder.y + shoulderWidth)
         val lowRight = rightHip ?: Point(rightShoulder.x, rightShoulder.y + shoulderWidth)
@@ -1041,6 +1187,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "Jiadroid"
+        /** Match iOS CameraSession: at most ~12.5 vision passes per second. */
+        private const val SCAN_MIN_MS = 80L
         private const val HOLD_MS = 400L
         private const val BODY_LIKELIHOOD = 0.7f
         private const val SUBJECT_MARKER = "Marker"

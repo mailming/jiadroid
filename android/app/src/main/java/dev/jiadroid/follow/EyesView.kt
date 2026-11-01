@@ -11,6 +11,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
@@ -37,6 +38,7 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val cheek = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(0, 255, 140, 140)
     }
+    private val browPath = Path()
 
     private var lookX = 0f
     private var lookY = 0f
@@ -47,9 +49,10 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val handler = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
-            advanceBlink()
-            invalidate()
-            handler.postDelayed(this, 33L)
+            val animating = advanceBlink()
+            if (animating) invalidate()
+            // Idle longer between blinks; keep 30fps only while lids or thinking wobble move.
+            handler.postDelayed(this, if (animating) 33L else 100L)
         }
     }
 
@@ -65,6 +68,7 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     }
 
     fun setEmotion(next: Emotion) {
+        if (emotion == next) return
         emotion = next
         invalidate()
     }
@@ -77,12 +81,16 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             "TURN RIGHT" -> -1f
             else -> -(decision.headYaw / 0.5f).coerceIn(-1f, 1f)
         }
-        lookX += (targetX - lookX) * 0.35f
-        lookY += (vertical.coerceIn(-1f, 1f) - lookY) * 0.25f
+        val nextX = lookX + (targetX - lookX) * 0.35f
+        val nextY = lookY + (vertical.coerceIn(-1f, 1f) - lookY) * 0.25f
+        if (abs(nextX - lookX) < 0.002f && abs(nextY - lookY) < 0.002f) return
+        lookX = nextX
+        lookY = nextY
         invalidate()
     }
 
-    private fun advanceBlink() {
+    /** @return true while a blink or thinking wobble needs another frame. */
+    private fun advanceBlink(): Boolean {
         val now = SystemClock.uptimeMillis()
         if (!blinkClosing && blink <= 0f && now >= nextBlinkAt) {
             blinkClosing = true
@@ -90,16 +98,21 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         if (blinkClosing) {
             blink = (blink + 0.28f).coerceAtMost(1f)
             if (blink >= 1f) blinkClosing = false
-        } else if (blink > 0f) {
+            return true
+        }
+        if (blink > 0f) {
             blink = (blink - 0.22f).coerceAtLeast(0f)
             if (blink <= 0f) {
                 nextBlinkAt = now + Random.nextLong(1800L, 4200L)
             }
+            return true
         }
         // Soft thinking wobble keeps the face alive without a blink.
-        if (emotion == Emotion.THINKING && blink <= 0f && (now / 120L) % 2L == 0L) {
+        if (emotion == Emotion.THINKING) {
             lookX += 0.01f * sin(now / 180.0).toFloat()
+            return true
         }
+        return false
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -165,7 +178,7 @@ class EyesView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             )
         }
 
-        val browPath = Path()
+        browPath.reset()
         val browY = cy - eyeHeight * 0.62f + mood.browLift * eyeHeight
         val left = cx - eyeWidth * 0.42f
         val right = cx + eyeWidth * 0.42f
